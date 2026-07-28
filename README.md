@@ -1,8 +1,8 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sgathrid/brain/main/resources/brian.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/sgathrid/brain/main/resources/brian_dark.svg">
-    <img src="https://raw.githubusercontent.com/Krv-Labs/topos/main/sgathrid/brain/main/resources/brian.svg" alt="Brian" width="400">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/sgathrid/brian/main/resources/brian_dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/sgathrid/brian/main/resources/brian.svg">
+    <img src="https://raw.githubusercontent.com/sgathrid/brian/main/resources/brian.svg" alt="Brian" width="400">
   </picture>
 </p>
 
