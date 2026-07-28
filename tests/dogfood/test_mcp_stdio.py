@@ -19,13 +19,25 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _copy_dogfood_repo(tmp_path: Path) -> Path:
     dogfood_root = tmp_path / "wiki-repo"
-    for name in ("wiki", "internal", "benchmarks", "wikicli", "bin"):
-        shutil.copytree(ROOT / name, dogfood_root / name)
-    sources = json.loads((dogfood_root / "wiki/sources.json").read_text(encoding="utf-8"))["sources"]
-    for source_path in sources:
-        placeholder = dogfood_root / source_path
-        placeholder.parent.mkdir(parents=True, exist_ok=True)
-        placeholder.write_text("Dogfood source placeholder.\n", encoding="utf-8")
+    for name in ("wiki", "internal", "wikicli", "bin"):
+        src = ROOT / name
+        if src.exists():
+            shutil.copytree(src, dogfood_root / name)
+    if (ROOT / "benchmarks").is_dir():
+        shutil.copytree(ROOT / "benchmarks", dogfood_root / "benchmarks")
+    sources_path = dogfood_root / "wiki/sources.json"
+    if sources_path.is_file():
+        try:
+            payload = json.loads(sources_path.read_text(encoding="utf-8"))
+            sources = payload.get("sources") if isinstance(payload, dict) else None
+        except json.JSONDecodeError:
+            sources = None
+        if isinstance(sources, dict):
+            for source_path in sources:
+                placeholder = dogfood_root / source_path
+                placeholder.parent.mkdir(parents=True, exist_ok=True)
+                if not placeholder.exists():
+                    placeholder.write_text("Dogfood source placeholder.\n", encoding="utf-8")
     return dogfood_root
 
 
@@ -45,7 +57,7 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
             assert initialized.serverInfo.name == "Brian Wiki"
             result = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
             assert not result.isError
-            assert result.structuredContent["hits"][0]["title"] == "My Org"
+            assert result.structuredContent["hits"][0]["title"] == "Brian Overview"
             cli = await asyncio.to_thread(
                 subprocess.run,
                 [sys.executable, str(ROOT / "bin/wiki"), "knowledge", "query", "wiki company info"],
@@ -57,16 +69,18 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
             assert json.loads(cli.stdout) == result.structuredContent
 
             product = await session.call_tool(
-                "query_company_knowledge", {"question": "Explain Erdos simply to a new colleague"}
+                "query_company_knowledge", {"question": "What is Brian?"}
             )
-            assert product.structuredContent["hits"][0]["title"] == "Erdos"
+            assert product.structuredContent["hits"][0]["title"] == "Brian Overview"
 
-            customers = await session.call_tool("query_company_knowledge", {"question": "Who are Brian customers?"})
-            assert customers.structuredContent["hits"][0]["title"] == "My Org"
-            assert all(hit["title"] != "Erdos" for hit in customers.structuredContent["hits"])
+            customers = await session.call_tool(
+                "query_company_knowledge", {"question": "cross-LLM context engine"}
+            )
+            assert customers.structuredContent["hits"][0]["title"] == "Brian Overview"
 
             unsupported = await session.call_tool(
-                "query_company_knowledge", {"question": "Who founded Brian and how many employees are there?"}
+                "query_company_knowledge",
+                {"question": "Who founded Brian and how many employees are there?"},
             )
             assert unsupported.structuredContent["no_results"] is True
             assert unsupported.structuredContent["hits"] == []
@@ -117,7 +131,7 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
 
             query = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
             assert not query.isError
-            assert query.structuredContent["hits"][0]["title"] == "My Org"
+            assert query.structuredContent["hits"][0]["title"] == "Brian Overview"
 
             invalid = await session.call_tool("read_company_page", {"path": "../AGENTS"})
             assert invalid.isError
@@ -126,8 +140,8 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             assert [str(template.uriTemplate) for template in templates.resourceTemplates] == [
                 "wiki://page/{folder}/{slug}"
             ]
-            resource = await session.read_resource("wiki://page/entities/brian-org")
-            assert "My Org builds continuous safety infrastructure for clinical AI" in resource.contents[0].text
+            resource = await session.read_resource("wiki://page/entities/brian-overview")
+            assert "open-source, cross-LLM context engine" in resource.contents[0].text
 
             source = "# Exact heading\n\nUnicode: naïve → β\n\n```sql\nselect  *  from x;\n```\nNo trailing newline"
             placeholder = "{{SOURCE_PATH}}"
@@ -151,7 +165,7 @@ verified: false
 
 # Dogfood Knowledge
 
-This temporary verification node preserves source evidence and links to [[My Org]].
+This temporary verification node preserves source evidence and links to [[Brian Overview]].
 
 ## Provenance and status
 
@@ -169,7 +183,11 @@ Compiled from `{placeholder}`.
                     {
                         "query": "where is the exact MCP ingestion dogfood",
                         "relevance": {"dogfood-knowledge": 3},
-                    }
+                    },
+                    {
+                        "query": "what is Brian Overview",
+                        "relevance": {"brian-overview": 3},
+                    },
                 ],
                 "confirmed": False,
             }
@@ -233,7 +251,7 @@ verified: false
 
 # CLI Knowledge
 
-This verification node links to [[My Org]].
+This verification node links to [[Brian Overview]].
 
 ## Provenance and status
 
@@ -241,7 +259,10 @@ Compiled from `{{SOURCE_PATH}}`.
 """,
             },
         ],
-        "retrieval_cases": [{"query": "where is the exact CLI knowledge update", "relevance": {"cli-knowledge": 3}}],
+        "retrieval_cases": [
+            {"query": "where is the exact CLI knowledge update", "relevance": {"cli-knowledge": 3}},
+            {"query": "what is Brian Overview", "relevance": {"brian-overview": 3}},
+        ],
     }
     command = [sys.executable, str(dogfood_root / "bin/wiki"), "knowledge", "update", "--input", "-"]
     preview = subprocess.run(command, input=json.dumps(payload), text=True, capture_output=True, check=False)

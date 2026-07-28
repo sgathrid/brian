@@ -22,11 +22,11 @@ def _run(*args: str, input_text: str | None = None) -> subprocess.CompletedProce
 
 
 def test_structured_cli_query_matches_mcp_adapter() -> None:
-    completed = _run("query", "Explain Erdos simply to a new colleague", "--limit", "3")
+    completed = _run("query", "What is Brian?", "--limit", "3")
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == asdict(
-        server.query_company_knowledge("Explain Erdos simply to a new colleague", limit=3)
+        server.query_company_knowledge("What is Brian?", limit=3)
     )
     assert completed.stderr == ""
 

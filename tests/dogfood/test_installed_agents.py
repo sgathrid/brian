@@ -31,14 +31,14 @@ def test_all_installed_agents_share_one_live_cli_and_cleanly_uninstall(
     environment = os.environ.copy()
     environment["HOME"] = str(home)
     cli = subprocess.run(
-        [str(home / ".local/bin/wiki"), "knowledge", "query", "What is Erdos?"],
+        [str(home / ".local/bin/wiki"), "knowledge", "query", "What is Brian?"],
         env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
     assert cli.returncode == 0, cli.stderr
-    assert json.loads(cli.stdout)["hits"][0]["title"] == "Erdos"
+    assert json.loads(cli.stdout)["hits"][0]["title"] == "Brian Overview"
 
     run_uninstall(ROOT, ["all"], purge_backups=True)
     assert all(integration_state(agent, home, ROOT) == "absent" for agent in SUPPORTED_AGENTS)

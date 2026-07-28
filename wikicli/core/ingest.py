@@ -118,7 +118,7 @@ def update_knowledge(
         detail = "missing" if approval_digest is None else "stale or does not match this payload"
         raise ValueError(f"approval digest is {detail}; preview this exact update again")
 
-    with tempfile.TemporaryDirectory(prefix="brian-wiki-ingest-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="wiki-ingest-") as tmp:
         candidate = Path(tmp)
         for directory in ("wiki", "internal", "benchmarks", "raw"):
             source_dir = repo_root / directory
@@ -140,7 +140,10 @@ def update_knowledge(
             rendered_pages.append(change.path)
 
         registry_path = candidate / "wiki/sources.json"
-        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        if registry_path.is_file():
+            registry = json.loads(registry_path.read_text(encoding="utf-8"))
+        else:
+            registry = {"version": 1, "sources": {}}
         sources = registry.get("sources")
         if registry.get("version") != 1 or not isinstance(sources, dict):
             raise ValueError("wiki/sources.json must contain version 1 and a sources object")
@@ -151,16 +154,21 @@ def update_knowledge(
             "pages": mapped_pages,
             "note": f"{source_type.strip() or 'context'} source: {source_title.strip()}",
         }
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
         cases_path = candidate / "benchmarks/cold_start_cases.json"
-        cases = json.loads(cases_path.read_text(encoding="utf-8"))
+        if cases_path.is_file():
+            cases = json.loads(cases_path.read_text(encoding="utf-8"))
+        else:
+            cases = []
         if not isinstance(cases, list):
             raise ValueError("cold_start_cases.json must contain an array")  # noqa: TRY004
         by_query = {case.get("query"): case for case in cases if isinstance(case, dict)}
         for case in normalized_cases:
             by_query[case.query] = {"query": case.query, "relevance": case.relevance}
         merged_cases = list(by_query.values())
+        cases_path.parent.mkdir(parents=True, exist_ok=True)
         cases_path.write_text(_format_cases(merged_cases), encoding="utf-8")
 
         db = WikiDatabase(candidate / "wiki")
@@ -356,6 +364,9 @@ def check_ingestion(
 
 
 def _load_source_registry(path: Path, report: IngestionReport) -> dict[str, dict[str, Any]]:
+    if not path.is_file():
+        report.warnings.append("sources.json missing; source coverage checks skipped (scaffold mode)")
+        return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -413,8 +424,10 @@ def _check_pages(
             report.errors.append(f"{rel}: type {page_type!r} does not belong in wiki/{folder}/")
         if "## Provenance and status" not in page.body:
             report.errors.append(f"{rel}: missing '## Provenance and status' section")
-        if rel not in mapped_pages:
+        if registry and rel not in mapped_pages:
             report.errors.append(f"{rel}: not mapped from any source in sources.json")
+        elif not registry:
+            report.warnings.append(f"{rel}: scaffold mode — sources.json mapping not enforced")
 
     ok, audit_lines = audit_wiki(db)
     if not ok:
@@ -450,7 +463,7 @@ def _check_sources(
         referenced_sources.update(references)
         if page.frontmatter.get("type") == "synthesis" and len(references) >= 2:
             multi_source_synthesis = True
-        if not references:
+        if not references and registry:
             report.errors.append(f"{rel}: provenance section cites no `raw/...` source")
 
     incorporated = 0
@@ -479,10 +492,11 @@ def _check_sources(
         elif mapped:
             report.errors.append(f"{source}: {status} sources must not map to knowledge pages")
 
-    for source in sorted(referenced_sources - registered):
-        report.errors.append(f"{source}: cited by a page but absent from sources.json")
-    if incorporated > 1 and not multi_source_synthesis:
-        report.errors.append("no synthesis page combines evidence from multiple sources")
+    if registry:
+        for source in sorted(referenced_sources - registered):
+            report.errors.append(f"{source}: cited by a page but absent from sources.json")
+        if incorporated > 1 and not multi_source_synthesis:
+            report.errors.append("no synthesis page combines evidence from multiple sources")
     report.facts.append(f"{incorporated} sources incorporated; {len(referenced_sources)} cited")
 
 
@@ -506,6 +520,11 @@ def _check_graph(db: WikiDatabase, pages: list[WikiPage], report: IngestionRepor
 
 def _check_questions(repo_root: Path, db: WikiDatabase, pages: list[WikiPage], report: IngestionReport) -> None:
     path = repo_root / "benchmarks" / "cold_start_cases.json"
+    if not path.is_file():
+        report.warnings.append(
+            "benchmarks/cold_start_cases.json absent; cold-start retrieval checks skipped (scaffold mode)"
+        )
+        return
     try:
         cases = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:

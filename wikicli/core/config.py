@@ -21,14 +21,15 @@ class WikiConfig:
 
         self.data_dir: Path = self.repo_root / "wiki"
         self.raw_dir: Path = self.repo_root / "raw"
+        # Default company page stem; private checkouts override via wiki.toml.
         self.company_file: Path = self.repo_root / "wiki" / "entities" / "brian-overview.md"
         self.registry_file: Path = self.repo_root / "internal" / "registry.md"
 
         self.upkeep_triggers: list[str] = []
         self.upkeep_instructions: str = ""
 
-        # Optional personalization (OSS init / wiki.toml). Defaults empty — never force
-        # people_tracking or other PII behaviors; private KOS ops leave these unset.
+        # Optional personalization (wiki.toml). Defaults empty — never force
+        # people_tracking or other PII-oriented behaviors.
         self.use_case: str = "company"
         self.agent_rules: list[str] = []
 

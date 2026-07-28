@@ -22,14 +22,14 @@ class TestFindKeywords:
         assert "pulsar" in stems(ContextResolver(db).find_keywords("Pulsar"))
 
     def test_matches_exact_multiword_title(self, db: WikiDatabase):
-        assert stems(ContextResolver(db).find_keywords("My Org"))[0] == "brian-org"
+        assert stems(ContextResolver(db).find_keywords("My Org"))[0] == "brian-overview"
 
     def test_matches_tag(self, db: WikiDatabase):
         assert "compass-ui" in stems(ContextResolver(db).find_keywords("nextjs"))
 
     def test_matches_body_prose(self, db: WikiDatabase):
         """This is the difference from `context`: `find` reads the body."""
-        assert "brian-org" in stems(ContextResolver(db).find_keywords("builds"))
+        assert "brian-overview" in stems(ContextResolver(db).find_keywords("builds"))
 
     def test_title_outranks_body(self, wiki_dir):
         """A page named for the term beats one that merely mentions it."""
@@ -59,7 +59,7 @@ class TestFindKeywords:
         assert ranked[0] == "compass-ui"
 
     def test_ignores_knowledge_base_routing_words(self, db: WikiDatabase):
-        assert stems(ContextResolver(db).find_keywords("wiki company info"))[0] == "brian-org"
+        assert stems(ContextResolver(db).find_keywords("wiki company info"))[0] == "brian-overview"
 
     def test_ignores_conversational_scaffolding_around_a_named_page(self, db: WikiDatabase):
         ranked = stems(ContextResolver(db).find_keywords("Tell me about Pulsar in plain English"))

@@ -39,8 +39,8 @@ class TestNormalization:
         [
             ("Compass UI", "compass-ui"),
             ("compass_ui", "compass-ui"),
-            ("/Repos/Front Ends/example.com", "repos-front-ends-brian-ai"),
-            ("brian-org.github.io", "brian-org-github-io"),
+            ("/Repos/Front Ends/example.com", "repos-front-ends-example-com"),
+            ("brian-overview.github.io", "brian-overview-github-io"),
             ("git@github.com:Org/repo.git", "git-github-com-org-repo-git"),
             ("A  (weird)  name!", "a-weird-name"),
             ("---leading-and-trailing---", "leading-and-trailing"),
@@ -122,8 +122,9 @@ class TestContextResolution:
             ("/Users/me/Repos/core/pulsar", "pulsar"),
             ("/Users/me/Repos/compass-UI", "compass-ui"),
             ("/Users/me/Repos/compass-platform", "compass-ui"),
-            ("/Users/me/Repos/Front Ends/example.com", "brian-org"),
-            ("/Users/me/Repos/brian-org", "brian-org"),
+            # Company keys are brian/brian-overview — not derived from example.com domain.
+            ("/Users/me/Repos/brian-overview", "brian-overview"),
+            ("/Users/me/Repos/brian", "brian-overview"),
         ],
     )
     def test_known_directories_resolve_to_their_page(self, db: WikiDatabase, cwd: str, expected_first: str):
@@ -159,7 +160,7 @@ class TestContextResolution:
 
     def test_alias_resolves(self, db: WikiDatabase):
         """`aliases:` exists so a renamed or misspelled directory still finds its page."""
-        assert stems(ContextResolver(db).resolve_context("/Users/me/Repos/brian-ai", limit=1)) == ["brian-org"]
+        assert stems(ContextResolver(db).resolve_context("/Users/me/Repos/brian-ai", limit=1)) == ["brian-overview"]
 
     def test_empty_and_root_input_are_safe(self, db: WikiDatabase):
         assert ContextResolver(db).resolve_context("", limit=3) == []

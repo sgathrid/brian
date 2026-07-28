@@ -88,7 +88,7 @@ def wiki_dir(tmp_path: Path) -> Path:
         type: entity
         scope: company
         summary: "Clinical AI safety company."
-        context_keys: [brian, brian-org, brianai]
+        context_keys: [brian, brian-overview, brianai]
         aliases: [brian-ai]
         tags: [clinical-ai, safety]
         updated: 2026-01-01

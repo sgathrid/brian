@@ -25,7 +25,7 @@ class TestRecursiveLoading:
         assert stems == {
             "pulsar",
             "compass-ui",
-            "brian-org",
+            "brian-overview",
             "themars",
             "lonely",
             "broken",

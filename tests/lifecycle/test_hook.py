@@ -110,7 +110,7 @@ class TestContent:
         assert "knowledge base" in text.lower()
 
     def test_empty_agent_rules_omits_rules_block(self):
-        """KOS and default company preset must not inject people-tracking prompts."""
+        """Default company preset must not inject people-tracking prompts."""
         text = payload()
         assert "## Active agent rules" not in text
 

@@ -162,8 +162,8 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
 
     upkeep = f"## Keeping it current\n{upkeep_text.strip()}\n\n" if upkeep_text else ""
 
-    # Optional agent_rules from wiki.toml (OSS personalization). No-op when empty or
-    # when lifecycle/init.py is absent (private KOS checkout).
+    # Optional agent_rules from wiki.toml. No-op when empty or when init catalog
+    # (lifecycle/init.py) is not present in this checkout.
     rules_block = ""
     if getattr(config, "agent_rules", None):
         try:

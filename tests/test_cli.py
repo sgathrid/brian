@@ -42,7 +42,13 @@ def test_install_failure_is_a_nonzero_cli_exit(monkeypatch):
     assert exc.value.code == 1
 
 
-def test_find_explain_prints_score_reasons(monkeypatch, capsys):
+def test_find_explain_prints_score_reasons(monkeypatch, capsys, db):
+    """Synthetic fixture + monkeypatch so this never depends on live demo content."""
+    from wikicli.core.resolve import SearchHit
+
+    page = next(p for p in db.pages.values() if p.stem == "pulsar")
+    ranked = SearchHit(page, score=12.0, reasons=["title"])
+    monkeypatch.setattr("wikicli.cli.search_keywords", lambda *_a, **_k: [ranked])
     monkeypatch.setattr(sys, "argv", ["wiki", "find", "Pulsar", "--limit", "1", "--explain"])
 
     main()

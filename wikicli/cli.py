@@ -20,12 +20,12 @@ from .lifecycle.status import run_status
 from .lifecycle.sync import SyncState, sync_wiki
 from .lifecycle.uninstall import run_uninstall
 
-# `wiki init` lives in OSS (Brian) personalization; private KOS has no init module.
+# Optional personalization module (present in public Brian checkouts only).
 try:
     from .lifecycle.init import RULE_HELP_TEXT, run_init
 
     _HAS_INIT = True
-except ImportError:  # pragma: no cover - KOS checkout
+except ImportError:  # pragma: no cover - checkouts without init
     RULE_HELP_TEXT = ""
     run_init = None  # type: ignore[assignment]
     _HAS_INIT = False
@@ -179,7 +179,7 @@ def main():
     p_hook = subparsers.add_parser("hook", help="Execute agent hooks")
     p_hook.add_argument("event", choices=["session-start"], help="Hook event type")
 
-    # wiki init (OSS personalization only — module absent in private KOS)
+    # wiki init (optional — only when lifecycle/init.py is present)
     if _HAS_INIT:
         p_init = subparsers.add_parser(
             "init",
