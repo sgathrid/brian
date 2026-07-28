@@ -84,7 +84,7 @@ def wiki_dir(tmp_path: Path) -> Path:
         entities,
         "brian-overview.md",
         """
-        title: "Brian Labs"
+        title: "My Org"
         type: entity
         scope: company
         summary: "Clinical AI safety company."
@@ -93,7 +93,7 @@ def wiki_dir(tmp_path: Path) -> Path:
         tags: [clinical-ai, safety]
         updated: 2026-01-01
         """,
-        "Brian Labs builds [[Pulsar]].",
+        "My Org builds [[Pulsar]].",
     )
 
     # Link target referenced by title, whose FILENAME differs from its title. Resolving links by

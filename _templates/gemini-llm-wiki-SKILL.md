@@ -5,7 +5,7 @@ description: Protocol for Brian's centralized context engine (the LLM Wiki). Tri
 
 # Brian LLM Wiki Protocol
 
-The Brian wiki (located at `$(wiki root)`) is a centralized context engine holding project architecture, decision logs, and domain context. It is **not** code documentation.
+The Brian wiki (located at `$(wiki root)`) is a centralized context engine holding company, product, clinical, and research context. It is **not** code documentation.
 
 The wiki CLI is on your PATH (run the installer if not). Locate the repo with `wiki root`; all paths below are relative to that root.
 

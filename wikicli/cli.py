@@ -14,12 +14,21 @@ from .core.knowledge import query_company_knowledge, read_company_page
 from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
 from .lifecycle.hook import run_session_start_hook
-from .lifecycle.init import RULE_HELP_TEXT, run_init
 from .lifecycle.install import run_install
 from .lifecycle.reset import run_reset
 from .lifecycle.status import run_status
 from .lifecycle.sync import SyncState, sync_wiki
 from .lifecycle.uninstall import run_uninstall
+
+# `wiki init` lives in OSS (Brian) personalization; private KOS has no init module.
+try:
+    from .lifecycle.init import RULE_HELP_TEXT, run_init
+
+    _HAS_INIT = True
+except ImportError:  # pragma: no cover - KOS checkout
+    RULE_HELP_TEXT = ""
+    run_init = None  # type: ignore[assignment]
+    _HAS_INIT = False
 
 C_GREEN = "\033[32m"
 C_RESET = "\033[0m"
@@ -100,7 +109,7 @@ def main():
 
     parser = argparse.ArgumentParser(
         prog="wiki",
-        description="Brian Wiki company knowledge base CLI",
+        description="Company knowledge base CLI",
     )
     subparsers = parser.add_subparsers(dest="subcommand", help="Available subcommands")
 
@@ -170,47 +179,44 @@ def main():
     p_hook = subparsers.add_parser("hook", help="Execute agent hooks")
     p_hook.add_argument("event", choices=["session-start"], help="Hook event type")
 
-    # wiki init
-    p_init = subparsers.add_parser(
-        "init",
-        help="Set up wiki.toml and your overview page (name, use case, optional agent rules)",
-        description=(
-            "Configure this Brian checkout for your organization. "
-            "Interactive mode asks for org name and use case, then optionally lets you "
-            "toggle agent behaviors in plain English. Non-interactive: pass -y with flags. "
-            "Edit wiki.toml anytime, or re-run wiki init. See README → Customize."
-        ),
-    )
-    p_init.add_argument(
-        "-c",
-        "--use-case",
-        choices=["company", "it_service_desk", "engineering", "research", "personal"],
-        default="",
-        help=(
-            "Preset: company (general KB; no people tracking by default), "
-            "it_service_desk (people+assets+no-secrets), engineering (ADRs), "
-            "research (strict sources), personal (fast notes)"
-        ),
-    )
-    p_init.add_argument(
-        "--rules",
-        default="",
-        help=RULE_HELP_TEXT,
-    )
-    p_init.add_argument("--name", default="", help="Organization or knowledge-base name")
-    p_init.add_argument("--short-name", default="", help="Short display name (e.g. Acme Wiki)")
-    p_init.add_argument("--description", default="", help="One-line description shown to agents")
-    p_init.add_argument(
-        "--company-file",
-        default="",
-        help="Overview page slug or path (default: wiki/entities/<org>-overview.md)",
-    )
-    p_init.add_argument(
-        "-y",
-        "--yes",
-        action="store_true",
-        help="Non-interactive: accept flags/defaults, no prompts",
-    )
+    # wiki init (OSS personalization only — module absent in private KOS)
+    if _HAS_INIT:
+        p_init = subparsers.add_parser(
+            "init",
+            help="Set up wiki.toml and your overview page (name, use case, optional agent rules)",
+            description=(
+                "Configure this checkout for your organization. "
+                "Interactive mode asks for org name and use case, then optionally lets you "
+                "toggle agent behaviors in plain English. Non-interactive: pass -y with flags. "
+                "Edit wiki.toml anytime, or re-run wiki init. See README → Customize."
+            ),
+        )
+        p_init.add_argument(
+            "-c",
+            "--use-case",
+            choices=["company", "it_service_desk", "engineering", "research", "personal"],
+            default="",
+            help=(
+                "Preset: company (general KB; no people tracking by default), "
+                "it_service_desk (people+assets+no-secrets), engineering (ADRs), "
+                "research (strict sources), personal (fast notes)"
+            ),
+        )
+        p_init.add_argument("--rules", default="", help=RULE_HELP_TEXT)
+        p_init.add_argument("--name", default="", help="Organization or knowledge-base name")
+        p_init.add_argument("--short-name", default="", help="Short display name (e.g. Acme Wiki)")
+        p_init.add_argument("--description", default="", help="One-line description shown to agents")
+        p_init.add_argument(
+            "--company-file",
+            default="",
+            help="Overview page slug or path (default: wiki/entities/<org>-overview.md)",
+        )
+        p_init.add_argument(
+            "-y",
+            "--yes",
+            action="store_true",
+            help="Non-interactive: accept flags/defaults, no prompts",
+        )
 
     # wiki install [targets...]
     p_install = subparsers.add_parser("install", help="Install agent integrations")
@@ -361,6 +367,9 @@ def main():
             print(output)
 
     elif args.subcommand == "init":
+        if not _HAS_INIT or run_init is None:
+            print("wiki init is not available in this checkout.", file=sys.stderr)
+            sys.exit(2)
         if not run_init(
             repo_root,
             use_case=args.use_case,

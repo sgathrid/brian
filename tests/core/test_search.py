@@ -22,7 +22,7 @@ class TestFindKeywords:
         assert "pulsar" in stems(ContextResolver(db).find_keywords("Pulsar"))
 
     def test_matches_exact_multiword_title(self, db: WikiDatabase):
-        assert stems(ContextResolver(db).find_keywords("Brian Labs"))[0] == "brian-org"
+        assert stems(ContextResolver(db).find_keywords("My Org"))[0] == "brian-org"
 
     def test_matches_tag(self, db: WikiDatabase):
         assert "compass-ui" in stems(ContextResolver(db).find_keywords("nextjs"))

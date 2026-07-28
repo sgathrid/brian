@@ -1,6 +1,6 @@
 ---
 name: wiki-context
-description: Resolve company, project, and related context from the Brian wiki (the company brain) from any repo. Use when starting work in an unfamiliar repo, reviewing a pitch/RFC/SBIR, or needing company background before answering.
+description: Resolve company, project, and related context from the Brian Wiki (the company brain) from any repo.
 ---
 
 # Using the Brian Context Engine

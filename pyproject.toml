@@ -9,7 +9,7 @@ description = "Universal LLM Knowledge Base Engine & Context Resolution CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-    { name = "My Org", email = "engineering@krvlabs.com" }
+    { name = "My Org", email = "team@example.com" }
 ]
 keywords = ["llm", "wiki", "context", "knowledge-base", "cli"]
 classifiers = [

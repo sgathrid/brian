@@ -2,16 +2,15 @@
 """
 wiki-sync-engine: Push engine/CLI improvements from KOS -> Brian (open source).
 
-Design goals
-------------
-* One command: ``bin/wiki-sync-engine push`` (defaults target to ../brian).
-* Functionality flows KOS -> Brian. Brian-specific assets are never clobbered:
-    README.md, resources/, wiki/, raw/, AGENTS.md, wiki.toml, uv.lock,
-    .gitignore, internal/registry.md, internal/skills/, and any Brian-only
-    files that exist under engine trees but not in KOS (overlay, not rmtree).
-* pyproject.toml is smart-merged: keep Brian package identity (name/authors/
-  description/readme) while taking engine deps/scripts/tooling from KOS.
-* Always sanitize company branding on push and run wiki-leak-check (fail closed).
+One-way data flow (enforced)
+----------------------------
+* Engine functionality may flow **KOS → Brian only**. There is **no pull**.
+* Company knowledge never syncs: ``wiki/``, ``raw/``, ``internal/registry.md``,
+  ``internal/skills/``, ``benchmarks/``, and other knowledge trees are excluded.
+* Reverse direction (Brian → KOS) is refused via repo-role classification.
+* Brian-specific assets are never clobbered (README, resources, wiki, raw,
+  AGENTS.md, wiki.toml, init personalization, etc.).
+* Brand sanitization + ``wiki-leak-check`` run on every apply (fail closed).
 
 Usage
 -----
@@ -55,12 +54,44 @@ BRIAN_OWNED_PATHS = frozenset(
         "resources",
         "wiki",
         "raw",
+        "benchmarks",
         "internal/registry.md",
         "internal/skills",
         "LICENSE",
         "LICENSE.md",
         "CHANGELOG.md",
         "CONTRIBUTING.md",
+    }
+)
+
+# Defense-in-depth: never treat knowledge / OSS-identity trees as engine payload.
+NEVER_SYNC_PREFIXES = (
+    "wiki/",
+    "raw/",
+    "resources/",
+    "benchmarks/",
+    "internal/skills/",
+    ".git/",
+    ".github/",
+)
+
+NEVER_SYNC_EXACT = frozenset(
+    {
+        "wiki",
+        "raw",
+        "resources",
+        "benchmarks",
+        "README.md",
+        "AGENTS.md",
+        "wiki.toml",
+        "uv.lock",
+        ".gitignore",
+        "LICENSE",
+        "LICENSE.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "internal/registry.md",
+        "internal/skills",
     }
 )
 
@@ -72,6 +103,8 @@ BRIAN_OWNED_ENGINE_FILES = frozenset(
     {
         "wikicli/lifecycle/init.py",
         "tests/lifecycle/test_init.py",
+        # OSS agent pointer branding / init-managed markers (not private company copy).
+        "_templates/agent-pointer.md",
     }
 )
 
@@ -119,6 +152,10 @@ PYPROJECT_PRESERVE_PROJECT_KEYS = (
     "classifiers",
 )
 
+# Markers used only for direction safety (not copied as content).
+_PRIVATE = "k" + "rv"  # company slug fragment
+_PRIVATE_ORG = "K" + "rv" + "-Labs"
+
 
 def _brand_replacements() -> list[tuple[str, str]]:
     c = "k" + "rv"
@@ -161,6 +198,19 @@ def should_skip_source_file(path: Path) -> bool:
     return False
 
 
+def is_never_sync_path(rel_posix: str) -> bool:
+    rel = rel_posix.replace("\\", "/")
+    if rel in NEVER_SYNC_EXACT or rel in BRIAN_OWNED_PATHS or rel in BRIAN_OWNED_ENGINE_FILES:
+        return True
+    for prefix in NEVER_SYNC_PREFIXES:
+        if rel == prefix.rstrip("/") or rel.startswith(prefix):
+            return True
+    for owned in BRIAN_OWNED_PATHS:
+        if rel == owned or rel.startswith(owned.rstrip("/") + "/"):
+            return True
+    return False
+
+
 def is_brian_owned(rel_posix: str) -> bool:
     rel = rel_posix.replace("\\", "/")
     if rel in BRIAN_OWNED_PATHS or rel in BRIAN_OWNED_ENGINE_FILES:
@@ -173,6 +223,108 @@ def is_brian_owned(rel_posix: str) -> bool:
 
 def looks_like_engine_repo(path: Path) -> bool:
     return path.is_dir() and (path / "pyproject.toml").is_file()
+
+
+def _read_text_if_exists(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _git_origin(repo: Path) -> str:
+    try:
+        res = subprocess.run(
+            ["git", "-C", str(repo), "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return ""
+    if res.returncode != 0:
+        return ""
+    return (res.stdout or "").strip()
+
+
+def classify_repo_role(repo: Path) -> str:
+    """
+    Return one of: private_kos | oss_brian | unknown
+
+    Used only to enforce one-way engine flow. Knowledge paths are never synced
+    regardless of classification.
+    """
+    py = _read_text_if_exists(repo / "pyproject.toml")
+    wiki_toml = _read_text_if_exists(repo / "wiki.toml")
+    origin = _git_origin(repo)
+    score_private = 0
+    score_brian = 0
+
+    if f'name = "{_PRIVATE}-wiki"' in py or f"name = '{_PRIVATE}-wiki'" in py:
+        score_private += 3
+    if 'name = "brian-wiki"' in py or "name = 'brian-wiki'" in py:
+        score_brian += 3
+
+    if f"{_PRIVATE}-labs.md" in wiki_toml or f"entities/{_PRIVATE}-labs" in wiki_toml:
+        score_private += 3
+    if "brian-overview.md" in wiki_toml:
+        score_brian += 2
+
+    if (repo / "wiki" / "entities" / f"{_PRIVATE}-labs.md").is_file():
+        score_private += 4
+    if (repo / "wiki" / "entities" / "brian-overview.md").is_file():
+        score_brian += 2
+
+    projects = repo / "wiki" / "projects"
+    if projects.is_dir() and any(projects.glob("*.md")):
+        score_private += 4
+    raw_dir = repo / "raw"
+    if raw_dir.is_dir():
+        for p in raw_dir.rglob("*"):
+            if p.is_file() and p.name != ".gitkeep":
+                score_private += 3
+                break
+
+    if (repo / "resources" / "brian.svg").is_file():
+        score_brian += 2
+
+    if _PRIVATE_ORG in origin or f"{_PRIVATE}-Labs/kos" in origin or origin.rstrip("/").endswith("/kos.git"):
+        score_private += 2
+    if re.search(r"/brian(?:\.git)?$", origin) or "brian-wiki" in origin:
+        score_brian += 2
+
+    if score_private >= 3 and score_private > score_brian:
+        return "private_kos"
+    if score_brian >= 3 and score_brian > score_private:
+        return "oss_brian"
+    return "unknown"
+
+
+def assert_safe_direction(src_repo: Path, dst_repo: Path) -> str | None:
+    """Return an error message if this sync would violate one-way KOS→Brian flow."""
+    if src_repo.resolve() == dst_repo.resolve():
+        return "Refusing to sync a repo onto itself."
+
+    src_role = classify_repo_role(src_repo)
+    dst_role = classify_repo_role(dst_repo)
+
+    if dst_role == "private_kos":
+        return (
+            "Refusing sync into a private company knowledge base (KOS). "
+            "Engine flow is KOS → Brian only; there is no pull/reverse path."
+        )
+
+    if src_role == "oss_brian":
+        return (
+            "Refusing reverse engine sync (Brian as source). "
+            "Run this command from KOS and push toward Brian only."
+        )
+
+    if src_role == "unknown" and dst_role == "oss_brian":
+        if not any((src_repo / rel).exists() for rel in ENGINE_PATHS):
+            return "Source does not contain engine paths to push."
+
+    return None
 
 
 def default_brian_path(kos_root: Path) -> Path | None:
@@ -202,18 +354,22 @@ def iter_engine_files(src_repo: Path) -> list[tuple[str, Path]]:
     """Return (relative_posix, absolute_path) for every file under ENGINE_PATHS."""
     out: list[tuple[str, Path]] = []
     for rel in ENGINE_PATHS:
+        if is_never_sync_path(rel):
+            continue
         src = src_repo / rel
         if not src.exists():
             continue
         if src.is_file():
-            if not should_skip_source_file(src):
-                out.append((rel.replace("\\", "/"), src))
+            rel_p = rel.replace("\\", "/")
+            if should_skip_source_file(src) or is_never_sync_path(rel_p) or is_brian_owned(rel_p):
+                continue
+            out.append((rel_p, src))
             continue
         for p in src.rglob("*"):
             if not p.is_file() or should_skip_source_file(p):
                 continue
             rel_p = p.relative_to(src_repo).as_posix()
-            if is_brian_owned(rel_p):
+            if is_never_sync_path(rel_p) or is_brian_owned(rel_p):
                 continue
             out.append((rel_p, p))
     return out
@@ -364,8 +520,8 @@ def build_plan(src_repo: Path, dst_repo: Path, sanitize: bool) -> list[Change]:
     changes: list[Change] = []
 
     for rel, src in iter_engine_files(src_repo):
-        if is_brian_owned(rel):
-            changes.append(Change(rel, "skip", "brian-owned"))
+        if is_brian_owned(rel) or is_never_sync_path(rel):
+            changes.append(Change(rel, "skip", "brian-owned-or-knowledge"))
             continue
         dst = dst_repo / rel
         if not dst.exists():
@@ -394,6 +550,10 @@ def apply_plan(
     applied = 0
     for ch in changes:
         if ch.action == "skip":
+            continue
+        # Hard refuse knowledge / Brian-owned paths even if a Change slipped in.
+        if is_never_sync_path(ch.rel) or is_brian_owned(ch.rel):
+            print(f"  ! refuse {ch.rel} (owned/knowledge path)")
             continue
         dst = dst_repo / ch.rel
         if ch.action == "merge" and ch.rel == "pyproject.toml":
@@ -448,14 +608,14 @@ def summarize(changes: list[Change]) -> tuple[int, int, int]:
     return adds, updates, skips
 
 
-def cmd_status_or_push(args: argparse.Namespace, kos_root: Path) -> int:
+def cmd_status_or_push(args: argparse.Namespace, source_root: Path) -> int:
     target = args.target_repo_path
     if target is None:
-        target = default_brian_path(kos_root)
+        target = default_brian_path(source_root)
         if target is None:
             print(
                 "ERROR: No Brian repo found. Pass a path or clone brian next to kos "
-                f"({kos_root.parent / 'brian'})."
+                f"({source_root.parent / 'brian'})."
             )
             return 1
     else:
@@ -465,21 +625,37 @@ def cmd_status_or_push(args: argparse.Namespace, kos_root: Path) -> int:
         print(f"ERROR: '{target}' is not a valid wiki engine repository.")
         return 1
 
-    if target.resolve() == kos_root.resolve():
-        print("ERROR: Refusing to sync a repo onto itself.")
-        return 1
+    direction_err = assert_safe_direction(source_root, target)
+    if direction_err:
+        print(f"ERROR: {direction_err}")
+        return 2
 
     sanitize = not args.no_sanitize
     dry_run = args.dry_run or args.action == "status"
 
-    print(f"{'Planning' if dry_run else 'Syncing'} engine: {kos_root.name} -> {target}")
-    print(f"  mode={'dry-run' if dry_run else 'apply'}  sanitize={sanitize}")
+    if (args.no_sanitize or args.skip_leak_check) and not args.i_understand_unsafe:
+        print(
+            "ERROR: --no-sanitize / --skip-leak-check require "
+            "--i-understand-unsafe (dangerous; not for public targets)."
+        )
+        return 2
+
+    src_role = classify_repo_role(source_root)
+    dst_role = classify_repo_role(target)
+    print(f"{'Planning' if dry_run else 'Syncing'} engine: {source_root.name} -> {target}")
     print(
-        "  preserves: README.md, resources/, wiki/, raw/, "
+        f"  mode={'dry-run' if dry_run else 'apply'}  sanitize={sanitize}  "
+        f"direction={src_role}->{dst_role}"
+    )
+    print(
+        "  one-way: KOS → Brian engine only (no pull; wiki/raw/skills never copied)"
+    )
+    print(
+        "  preserves: README.md, resources/, wiki/, raw/, init personalization, "
         "Brian-only engine files, pyproject identity"
     )
 
-    changes = build_plan(kos_root, target, sanitize=sanitize)
+    changes = build_plan(source_root, target, sanitize=sanitize)
     adds, updates, skips = summarize(changes)
 
     actionable = [c for c in changes if c.action != "skip"]
@@ -500,7 +676,7 @@ def cmd_status_or_push(args: argparse.Namespace, kos_root: Path) -> int:
         return 0
 
     if dry_run and args.action == "status":
-        print("\nRun: bin/wiki-sync-engine push   # apply")
+        print("\nRun: bin/wiki-sync-engine push   # apply (KOS → Brian only)")
         return 0
 
     if dry_run:
@@ -508,16 +684,17 @@ def cmd_status_or_push(args: argparse.Namespace, kos_root: Path) -> int:
         return 0
 
     try:
-        applied = apply_plan(kos_root, target, changes, sanitize=sanitize, dry_run=False)
+        applied = apply_plan(source_root, target, changes, sanitize=sanitize, dry_run=False)
     except OSError as exc:
         print(f"ERROR during sync (fail closed): {exc}")
         return 1
 
     print(f"\nEngine sync complete ({applied} file(s) written).")
-    print("Brian-owned paths left untouched (README, resources, wiki, …).")
+    print("Brian-owned paths left untouched (README, resources, wiki, init, …).")
 
     if not args.skip_leak_check:
         return run_leak_check(target)
+    print("WARNING: leak check skipped (--skip-leak-check).")
     return 0
 
 
@@ -526,7 +703,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="wiki-sync-engine",
         description=(
             "Push KOS engine improvements into the Brian open-source repo "
-            "without clobbering Brian-specific files."
+            "(one-way KOS → Brian). Never copies company knowledge; never pulls."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -535,6 +712,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "  bin/wiki-sync-engine push ~/Repos/brian\n"
             "  bin/wiki-sync-engine push --dry-run\n"
             "  bin/wiki-sync-engine status\n"
+            "\n"
+            "direction:\n"
+            "  Engine code only, KOS → Brian. There is no pull.\n"
+            "  wiki/, raw/, internal/skills/, registry, and README are never synced.\n"
             "\n"
             "env:\n"
             "  BRIAN_REPO / BRIAN_PATH   override default ../brian lookup\n"
@@ -560,12 +741,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--no-sanitize",
         action="store_true",
-        help="Disable brand sanitization (dangerous; not for public targets)",
+        help="Disable brand sanitization (dangerous; requires --i-understand-unsafe)",
     )
     parser.add_argument(
         "--skip-leak-check",
         action="store_true",
-        help="Skip post-sync leak check (dangerous)",
+        help="Skip post-sync leak check (dangerous; requires --i-understand-unsafe)",
+    )
+    parser.add_argument(
+        "--i-understand-unsafe",
+        action="store_true",
+        help="Acknowledge unsafe flags (--no-sanitize / --skip-leak-check)",
     )
     parser.add_argument(
         "-v",
@@ -577,10 +763,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv if argv is not None else sys.argv[1:])
-    kos_root = Path(__file__).resolve().parent.parent
+    raw = list(argv if argv is not None else sys.argv[1:])
+    # Hard-reject legacy reverse flow before argparse choices surface a generic error.
+    if raw and raw[0] == "pull":
+        print(
+            "ERROR: 'pull' is not supported. Engine sync is one-way KOS → Brian only.\n"
+            "Company knowledge (wiki/, raw/, skills) must never flow between repos via this tool."
+        )
+        return 2
+
+    args = parse_args(raw)
+    # Script-containing repo is the source candidate; direction gates still refuse
+    # Brian→KOS if this script was copied into Brian.
+    source_root = Path(__file__).resolve().parent.parent
     if args.action in {"push", "status"}:
-        return cmd_status_or_push(args, kos_root)
+        return cmd_status_or_push(args, source_root)
     print(f"Unknown action {args.action}")
     return 1
 

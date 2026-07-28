@@ -45,7 +45,7 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
             assert initialized.serverInfo.name == "Brian Wiki"
             result = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
             assert not result.isError
-            assert result.structuredContent["hits"][0]["title"] == "Brian Labs"
+            assert result.structuredContent["hits"][0]["title"] == "My Org"
             cli = await asyncio.to_thread(
                 subprocess.run,
                 [sys.executable, str(ROOT / "bin/wiki"), "knowledge", "query", "wiki company info"],
@@ -62,7 +62,7 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
             assert product.structuredContent["hits"][0]["title"] == "Erdos"
 
             customers = await session.call_tool("query_company_knowledge", {"question": "Who are Brian customers?"})
-            assert customers.structuredContent["hits"][0]["title"] == "Brian Labs"
+            assert customers.structuredContent["hits"][0]["title"] == "My Org"
             assert all(hit["title"] != "Erdos" for hit in customers.structuredContent["hits"])
 
             unsupported = await session.call_tool(
@@ -117,7 +117,7 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
 
             query = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
             assert not query.isError
-            assert query.structuredContent["hits"][0]["title"] == "Brian Labs"
+            assert query.structuredContent["hits"][0]["title"] == "My Org"
 
             invalid = await session.call_tool("read_company_page", {"path": "../AGENTS"})
             assert invalid.isError
@@ -127,7 +127,7 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
                 "wiki://page/{folder}/{slug}"
             ]
             resource = await session.read_resource("wiki://page/entities/brian-org")
-            assert "Brian Labs builds continuous safety infrastructure for clinical AI" in resource.contents[0].text
+            assert "My Org builds continuous safety infrastructure for clinical AI" in resource.contents[0].text
 
             source = "# Exact heading\n\nUnicode: naïve → β\n\n```sql\nselect  *  from x;\n```\nNo trailing newline"
             placeholder = "{{SOURCE_PATH}}"
@@ -151,7 +151,7 @@ verified: false
 
 # Dogfood Knowledge
 
-This temporary verification node preserves source evidence and links to [[Brian Labs]].
+This temporary verification node preserves source evidence and links to [[My Org]].
 
 ## Provenance and status
 
@@ -233,7 +233,7 @@ verified: false
 
 # CLI Knowledge
 
-This verification node links to [[Brian Labs]].
+This verification node links to [[My Org]].
 
 ## Provenance and status
 

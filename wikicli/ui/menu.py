@@ -87,7 +87,7 @@ def run_scroll_viewer(
     header: str,
     items: Sequence[str],
     max_visible: int = 20,
-    title: str = "Brian Wiki Reset",
+    title: str = "Wiki Reset",
     non_interactive: bool = False,
 ) -> None:
     """Renders an interactive scrollable list box for stdout items via /dev/tty."""
@@ -194,15 +194,17 @@ def run_scroll_viewer(
 def run_confirm(
     prompt: str,
     default: bool = False,
-    title: str = "Brian Wiki Reset",
+    title: str = "Wiki Setup",
+    confirm_label: str = "proceed with setup",
+    cancel_label: str = "cancel setup",
     non_interactive: bool = False,
 ) -> bool:
     """Renders an interactive confirmation prompt (Yes/No) with default choice."""
     if non_interactive or not is_tty():
         return default
     options = [
-        ("no", "No", "cancel reset", not default),
-        ("yes", "Yes", "proceed with deletion", default),
+        ("no", "No", cancel_label, not default),
+        ("yes", "Yes", confirm_label, default),
     ]
     res = run_menu(prompt, options=options, title=title, single_select=True)
     return res == "yes"
@@ -211,7 +213,7 @@ def run_confirm(
 def run_menu(
     prompt_or_json: str,
     options: Sequence[tuple[Any, ...]] | None = None,
-    title: str = "Brian Wiki Setup",
+    title: str = "Wiki Setup",
     non_interactive: bool = False,
     single_select: bool = False,
 ) -> str:

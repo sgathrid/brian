@@ -162,9 +162,14 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
 
     upkeep = f"## Keeping it current\n{upkeep_text.strip()}\n\n" if upkeep_text else ""
 
+    # Optional agent_rules from wiki.toml (OSS personalization). No-op when empty or
+    # when lifecycle/init.py is absent (private KOS checkout).
     rules_block = ""
-    if config.agent_rules:
-        from .init import ALL_AGENT_RULES
+    if getattr(config, "agent_rules", None):
+        try:
+            from .init import ALL_AGENT_RULES
+        except ImportError:
+            ALL_AGENT_RULES = {}
         rule_lines = []
         for r_key in config.agent_rules:
             if r_key in ALL_AGENT_RULES:

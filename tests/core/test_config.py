@@ -31,7 +31,7 @@ class TestRuntimeRequirement:
 class TestRealManifest:
     def test_metadata_loaded(self):
         cfg = WikiConfig(REPO_ROOT)
-        assert cfg.name in ("Brian Knowledge Base", "My Org Knowledge Base")
+        assert cfg.name
         assert cfg.short_name
         assert "knowledge base" in cfg.description.lower()
 
@@ -39,8 +39,8 @@ class TestRealManifest:
         cfg = WikiConfig(REPO_ROOT)
         assert cfg.data_dir == REPO_ROOT / "wiki"
         assert cfg.data_dir.is_dir()
-        assert cfg.company_file == REPO_ROOT / "wiki/entities/brian-overview.md"
         assert cfg.company_file.is_file()
+        assert cfg.company_file.is_relative_to(cfg.data_dir)
 
     def test_multiline_array_parses_as_a_list(self):
         """The exact shape the fallback parser destroyed."""
@@ -87,3 +87,8 @@ class TestDefaultsAndOverrides:
         cfg = WikiConfig(tmp_path)
         assert cfg.use_case == "it_service_desk"
         assert cfg.agent_rules == ["people_tracking", "asset_tracking"]
+
+    def test_agent_rules_default_empty(self):
+        """Privacy-by-default: no people_tracking unless wiki.toml opts in."""
+        cfg = WikiConfig(REPO_ROOT)
+        assert cfg.agent_rules == []

@@ -27,6 +27,8 @@ class WikiConfig:
         self.upkeep_triggers: list[str] = []
         self.upkeep_instructions: str = ""
 
+        # Optional personalization (OSS init / wiki.toml). Defaults empty — never force
+        # people_tracking or other PII behaviors; private KOS ops leave these unset.
         self.use_case: str = "company"
         self.agent_rules: list[str] = []
 
@@ -52,7 +54,13 @@ class WikiConfig:
         self.description = wiki_sec.get("description", self.description)
         self.version = wiki_sec.get("version", self.version)
         self.use_case = wiki_sec.get("use_case", self.use_case)
-        self.agent_rules = wiki_sec.get("agent_rules", self.agent_rules)
+        raw_rules = wiki_sec.get("agent_rules", self.agent_rules)
+        if isinstance(raw_rules, str):
+            self.agent_rules = [r.strip() for r in raw_rules.split(",") if r.strip()]
+        elif isinstance(raw_rules, list):
+            self.agent_rules = [str(r).strip() for r in raw_rules if str(r).strip()]
+        else:
+            self.agent_rules = []
 
         paths_sec = data.get("paths", {})
         if "data_dir" in paths_sec:

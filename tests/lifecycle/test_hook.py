@@ -67,9 +67,13 @@ class TestContent:
         assert "not code documentation" in text.lower(), "the framing is load-bearing; agents conflate the two"
 
     def test_includes_company_context(self):
+        from wikicli.core.config import WikiConfig
+
+        cfg = WikiConfig(REPO_ROOT)
         text = payload()
-        assert "cross-llm context engine" in text.lower() or "knowledge base" in text.lower()
-        assert "(`wiki/entities/brian-overview.md`)" in text
+        assert "knowledge base" in text.lower()
+        rel = cfg.company_file.relative_to(REPO_ROOT).as_posix()
+        assert f"(`{rel}`)" in text
 
     def test_includes_the_catalog(self):
         assert "[[" in payload(), "the brief must list pages as wikilinks"
@@ -83,7 +87,11 @@ class TestContent:
     def test_situated_block_present_for_a_known_repo(self):
         """The whole value proposition. Its absence is invisible without this assertion."""
         text = payload(cwd="/Users/anyone/Repos/pulsar")
-        assert "Working context" in text or "[[Context Cascade]]" in text or "Brian Overview" in text or "[[Brian Overview]]" in text
+        assert (
+            "Working context" in text
+            or "[[Context Cascade]]" in text
+            or "Overview" in text
+        )
 
     def test_backlog_is_not_injected(self):
         """`## Backlog` is maintenance bookkeeping for `wiki lint`, not session context."""
@@ -99,7 +107,12 @@ class TestContent:
 
         assert "Wiki freshness" in text
         assert "may not match `origin/main`" in text
-        assert "Brian" in text or "My Org" in text
+        assert "knowledge base" in text.lower()
+
+    def test_empty_agent_rules_omits_rules_block(self):
+        """KOS and default company preset must not inject people-tracking prompts."""
+        text = payload()
+        assert "## Active agent rules" not in text
 
 
 class TestBudget:

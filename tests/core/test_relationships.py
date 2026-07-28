@@ -24,9 +24,9 @@ class TestBacklinks:
     def test_backlinks_record_incoming_edges(self, db: WikiDatabase, wiki_dir: Path):
         out = generate_backlinks(db, wiki_dir)
         content = out.read_text(encoding="utf-8")
-        # Pulsar is linked from Compass UI, Brian Labs, ThemaRS and Lonely.
+        # Pulsar is linked from Compass UI, My Org, ThemaRS and Lonely.
         assert "[[Pulsar]]" in content
-        for source in ("Compass UI", "Brian Labs", "ThemaRS Pipeline", "Lonely Concept"):
+        for source in ("Compass UI", "My Org", "ThemaRS Pipeline", "Lonely Concept"):
             assert source in content, f"{source} links to Pulsar and should appear as a backlink"
 
     def test_backlink_target_resolved_by_title_not_filename(self, db: WikiDatabase, wiki_dir: Path):
