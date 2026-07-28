@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""bin/wiki: Unified CLI entrypoint for Brian Wiki management and context resolution."""
+
+import sys
+
+# Floor check for Python 3.11+
+if sys.version_info < (3, 11):
+    sys.stderr.write(
+        f"Error: Python 3.11+ is required for Brian Wiki CLI, but found Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}.\n"
+        f"Please run using Python 3.11+ or activate the project virtual environment (`uv run wiki`).\n"
+    )
+    sys.exit(1)
+
+from pathlib import Path
+
+# Add repo root to sys.path to load wikicli module
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from wikicli.cli import main
+
+if __name__ == "__main__":
+    main()

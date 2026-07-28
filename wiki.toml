@@ -1,0 +1,23 @@
+# wiki.toml - Brian Knowledge Base Engine Manifest
+
+[wiki]
+name = "Brian Knowledge Base"
+short_name = "Brian Wiki"
+description = "Open-source agentic knowledge base — cross-LLM brain & context engine"
+version = "0.1.0"
+
+[paths]
+data_dir = "wiki"
+raw_dir = "raw"
+company_file = "wiki/entities/brian-overview.md"
+registry_file = "internal/registry.md"
+
+[upkeep]
+triggers = [
+    "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
+    "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report"
+]
+instructions = """
+Then say which page to add or update and why, and let the user decide. Never commit or push the wiki yourself.
+Refactors, dependency bumps, tests and formatting need nothing — 'already current' is a valid answer; do not invent work.
+"""

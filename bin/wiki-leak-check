@@ -1,0 +1,92 @@
+#!/usr/bin/env python3
+"""
+wiki-leak-check: Leak prevention gate for Brian open-source knowledge base.
+Ensures no proprietary company data or unapproved knowledge pages are committed/pushed to Brian.
+"""
+
+import sys
+import subprocess
+import re
+from pathlib import Path
+
+FORBIDDEN_PATHS = [
+    r"^raw/(?!(\.gitkeep)$).*",
+]
+
+FORBIDDEN_PATTERNS = [
+    (r"\bK" + r"rv\b", "Company name reference"),
+    (r"\bK" + r"rv-Labs\b", "Company organization reference"),
+    (r"k" + r"rv\.ai", "Company domain reference"),
+    (r"ak-[\w-]{16,}", "Possible API Key"),
+    (r"sk-[\w-]{16,}", "Possible API Key"),
+]
+
+ALLOWED_WIKI_FILES = {
+    "wiki/CONVENTIONS.md",
+    "wiki/SCALING.md",
+    "wiki/index.md",
+    "wiki/tags.md",
+    "wiki/backlinks.md",
+    "wiki/sources.json",
+    "wiki/entities/brian-overview.md",
+}
+
+def main():
+    repo_root = Path(__file__).resolve().parent.parent
+    errors = []
+
+    print("🔍 Running Brian Leak Check...")
+
+    tracked_files = []
+    res = subprocess.run(
+        ["git", "ls-files"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True
+    )
+    if res.returncode == 0:
+        tracked_files = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+
+    if not tracked_files:
+        for p in repo_root.rglob("*"):
+            if p.is_file() and not any(part.startswith(".") for part in p.relative_to(repo_root).parts):
+                tracked_files.append(str(p.relative_to(repo_root)))
+
+    for file_path in tracked_files:
+        for pattern in FORBIDDEN_PATHS:
+            if re.match(pattern, file_path):
+                errors.append(f"❌ Forbidden file path: {file_path}")
+
+        if file_path.startswith("wiki/"):
+            if file_path not in ALLOWED_WIKI_FILES:
+                if file_path.startswith(("wiki/entities/", "wiki/concepts/", "wiki/projects/", "wiki/syntheses/")):
+                    errors.append(f"⚠️ Unapproved knowledge page in open-source repo: {file_path}")
+
+    for file_path in tracked_files:
+        p = repo_root / file_path
+        if not p.is_file():
+            continue
+        
+        if file_path.endswith((".lock", ".png", ".jpg", ".jpeg", ".ico", ".pdf", ".zip")):
+            continue
+
+        try:
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            for pattern, reason in FORBIDDEN_PATTERNS:
+                matches = re.finditer(pattern, content, re.IGNORECASE)
+                for m in matches:
+                    line_no = content[:m.start()].count("\n") + 1
+                    errors.append(f"❌ Sensitive pattern [{reason}] in {file_path}:{line_no} -> '{m.group(0)}'")
+        except Exception:
+            pass
+
+    if errors:
+        print("\n".join(errors))
+        print("\n⛔ LEAK CHECK FAILED: Sensitive or unapproved files detected.")
+        sys.exit(1)
+    else:
+        print("✅ LEAK CHECK PASSED: Clean open-source state verified.")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()

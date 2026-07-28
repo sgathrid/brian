@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+"""
+wiki-sync-engine: Sync engine/CLI functionality updates between private company repo (KOS) and open-source repo (Brian).
+Strictly syncs engine/code directories while ignoring knowledge base files (wiki/, raw/, registry.md).
+"""
+
+import sys
+import shutil
+import subprocess
+from pathlib import Path
+
+ENGINE_PATHS = [
+    "wikicli",
+    "bin",
+    "commands",
+    "_templates",
+    "internal/mcp_server_wiki.py",
+    "internal/prompts",
+    "pyproject.toml",
+]
+
+def sanitize_file(p: Path, target_is_brian: bool):
+    if not p.is_file() or p.suffix in [".lock", ".png", ".jpg", ".pyc"]:
+        return
+    try:
+        c = p.read_text(encoding="utf-8", errors="ignore")
+        if target_is_brian:
+            c = c.replace("k" + "rv-labs.md", "brian-overview.md")
+            c = c.replace("K" + "rv Labs", "My Org")
+            c = c.replace("K" + "rv-Labs", "Brian-Org")
+            c = c.replace("k" + "rv-labs", "brian-org")
+            c = c.replace("K" + "rv Wiki", "Brian Wiki")
+            c = c.replace("k" + "rv-wiki", "brian-wiki")
+            c = c.replace("k" + "rv_wiki", "brian_wiki")
+            c = c.replace("k" + "rv.ai", "example.com")
+            c = c.replace("K" + "rv", "Brian")
+            c = c.replace("k" + "rv", "brian")
+        if c != p.read_text(encoding="utf-8", errors="ignore"):
+            p.write_text(c, encoding="utf-8")
+    except Exception:
+        pass
+
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: wiki-sync-engine <push|pull> <target_repo_path>")
+        print("Example: wiki-sync-engine push /Users/gathrid/Repos/brian")
+        sys.exit(1)
+
+    action = sys.argv[1].lower()
+    target_path = Path(sys.argv[2]).resolve()
+
+    current_repo = Path(__file__).resolve().parent.parent
+
+    if action == "push":
+        src_repo = current_repo
+        dst_repo = target_path
+    elif action == "pull":
+        src_repo = target_path
+        dst_repo = current_repo
+    else:
+        print(f"Unknown action '{action}'. Use 'push' or 'pull'.")
+        sys.exit(1)
+
+    if not dst_repo.exists() or not (dst_repo / "pyproject.toml").exists():
+        print(f"❌ Error: Target directory '{dst_repo}' does not appear to be a valid wiki engine repository.")
+        sys.exit(1)
+
+    print(f"🔄 Syncing engine updates: {src_repo.name} -> {dst_repo.name}...")
+
+    copied_count = 0
+    for rel_path in ENGINE_PATHS:
+        src = src_repo / rel_path
+        dst = dst_repo / rel_path
+
+        if not src.exists():
+            continue
+
+        if src.is_dir():
+            if dst.exists():
+                shutil.rmtree(dst)
+            shutil.copytree(src, dst)
+            if "brian" in dst_repo.name.lower():
+                for p in dst.rglob("*"):
+                    sanitize_file(p, target_is_brian=True)
+            print(f"  ✓ Synced directory: {rel_path}")
+            copied_count += 1
+        elif src.is_file():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+            if "brian" in dst_repo.name.lower():
+                sanitize_file(dst, target_is_brian=True)
+            print(f"  ✓ Synced file: {rel_path}")
+            copied_count += 1
+
+    print(f"\n✨ Engine sync complete ({copied_count} items updated).")
+
+    # If Brian repo, run leak check verification
+    leak_check = dst_repo / "bin" / "wiki-leak-check"
+    if leak_check.exists():
+        print("\n🛡️ Verifying target repository with leak check...")
+        res = subprocess.run([str(leak_check)], cwd=dst_repo)
+        if res.returncode != 0:
+            print("❌ WARNING: Target repository failed leak check after sync!")
+            sys.exit(1)
+
+if __name__ == "__main__":
+    main()

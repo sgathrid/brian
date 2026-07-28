@@ -1,0 +1,54 @@
+# ==========================================
+# Knowledge Base & Local Ingest Data
+# ==========================================
+# Raw source documents are local-only and not tracked in git
+raw/*
+!raw/.gitkeep
+
+# Local user/vault configs
+.obsidian/
+
+# ==========================================
+# LLM Agents, IDEs & Local Tooling
+# ==========================================
+.env
+.envrc
+.antigravitycli/
+.claude/local/
+.codex/local/
+.idea/
+.vscode/
+
+# ==========================================
+# Python & Build Artifacts
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+
+# Testing & Linting Caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ==========================================
+# Operating System Junk
+# ==========================================
+.DS_Store
+.DS_Store?
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
