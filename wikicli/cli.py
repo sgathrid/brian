@@ -14,6 +14,7 @@ from .core.knowledge import query_company_knowledge, read_company_page
 from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
 from .lifecycle.hook import run_session_start_hook
+from .lifecycle.init import RULE_HELP_TEXT, run_init
 from .lifecycle.install import run_install
 from .lifecycle.reset import run_reset
 from .lifecycle.status import run_status
@@ -169,6 +170,48 @@ def main():
     p_hook = subparsers.add_parser("hook", help="Execute agent hooks")
     p_hook.add_argument("event", choices=["session-start"], help="Hook event type")
 
+    # wiki init
+    p_init = subparsers.add_parser(
+        "init",
+        help="Set up wiki.toml and your overview page (name, use case, optional agent rules)",
+        description=(
+            "Configure this Brian checkout for your organization. "
+            "Interactive mode asks for org name and use case, then optionally lets you "
+            "toggle agent behaviors in plain English. Non-interactive: pass -y with flags. "
+            "Edit wiki.toml anytime, or re-run wiki init. See README → Customize."
+        ),
+    )
+    p_init.add_argument(
+        "-c",
+        "--use-case",
+        choices=["company", "it_service_desk", "engineering", "research", "personal"],
+        default="",
+        help=(
+            "Preset: company (general KB; no people tracking by default), "
+            "it_service_desk (people+assets+no-secrets), engineering (ADRs), "
+            "research (strict sources), personal (fast notes)"
+        ),
+    )
+    p_init.add_argument(
+        "--rules",
+        default="",
+        help=RULE_HELP_TEXT,
+    )
+    p_init.add_argument("--name", default="", help="Organization or knowledge-base name")
+    p_init.add_argument("--short-name", default="", help="Short display name (e.g. Acme Wiki)")
+    p_init.add_argument("--description", default="", help="One-line description shown to agents")
+    p_init.add_argument(
+        "--company-file",
+        default="",
+        help="Overview page slug or path (default: wiki/entities/<org>-overview.md)",
+    )
+    p_init.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Non-interactive: accept flags/defaults, no prompts",
+    )
+
     # wiki install [targets...]
     p_install = subparsers.add_parser("install", help="Install agent integrations")
     p_install.add_argument(
@@ -316,6 +359,19 @@ def main():
             stdin_data = sys.stdin.read() if not sys.stdin.isatty() else ""
             output = run_session_start_hook(repo_root, stdin_data)
             print(output)
+
+    elif args.subcommand == "init":
+        if not run_init(
+            repo_root,
+            use_case=args.use_case,
+            agent_rules=args.rules,
+            name=args.name,
+            short_name=args.short_name,
+            description=args.description,
+            company_file_slug=args.company_file,
+            non_interactive=args.yes,
+        ):
+            sys.exit(1)
 
     elif args.subcommand == "install":
         if not run_install(repo_root, args.targets, non_interactive=args.yes):

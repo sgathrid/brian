@@ -31,7 +31,7 @@ class TestRuntimeRequirement:
 class TestRealManifest:
     def test_metadata_loaded(self):
         cfg = WikiConfig(REPO_ROOT)
-        assert cfg.name == "Brian Labs Knowledge Base"
+        assert cfg.name in ("Brian Knowledge Base", "My Org Knowledge Base")
         assert cfg.short_name
         assert "knowledge base" in cfg.description.lower()
 
@@ -78,3 +78,12 @@ class TestDefaultsAndOverrides:
         (tmp_path / "wiki.toml").write_text("[wiki\nname = broken", encoding="utf-8")
         cfg = WikiConfig(tmp_path)
         assert cfg.data_dir == tmp_path / "wiki"
+
+    def test_use_case_and_rules_loaded(self, tmp_path: Path):
+        (tmp_path / "wiki.toml").write_text(
+            '[wiki]\nname = "IT KB"\nuse_case = "it_service_desk"\nagent_rules = ["people_tracking", "asset_tracking"]\n',
+            encoding="utf-8",
+        )
+        cfg = WikiConfig(tmp_path)
+        assert cfg.use_case == "it_service_desk"
+        assert cfg.agent_rules == ["people_tracking", "asset_tracking"]

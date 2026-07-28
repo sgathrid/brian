@@ -1,14 +1,38 @@
 #!/usr/bin/env python3
 """
-wiki-sync-engine: Sync engine/CLI functionality updates between private company repo (KOS) and open-source repo (Brian).
-Strictly syncs engine/code directories while ignoring knowledge base files (wiki/, raw/, registry.md).
+wiki-sync-engine: Push engine/CLI improvements from KOS -> Brian (open source).
+
+Design goals
+------------
+* One command: ``bin/wiki-sync-engine push`` (defaults target to ../brian).
+* Functionality flows KOS -> Brian. Brian-specific assets are never clobbered:
+    README.md, resources/, wiki/, raw/, AGENTS.md, wiki.toml, uv.lock,
+    .gitignore, internal/registry.md, internal/skills/, and any Brian-only
+    files that exist under engine trees but not in KOS (overlay, not rmtree).
+* pyproject.toml is smart-merged: keep Brian package identity (name/authors/
+  description/readme) while taking engine deps/scripts/tooling from KOS.
+* Always sanitize company branding on push and run wiki-leak-check (fail closed).
+
+Usage
+-----
+  bin/wiki-sync-engine push                  # -> ../brian
+  bin/wiki-sync-engine push /path/to/brian
+  bin/wiki-sync-engine push --dry-run
+  bin/wiki-sync-engine status                # show what would change
 """
 
-import sys
-import shutil
+from __future__ import annotations
+
+import argparse
+import filecmp
+import os
+import re
 import subprocess
+import sys
 from pathlib import Path
 
+# Engine paths owned by KOS. Copied as an overlay (update/add), never wholesale
+# directory replace, so Brian-only files under these trees survive.
 ENGINE_PATHS = [
     "wikicli",
     "bin",
@@ -16,92 +40,550 @@ ENGINE_PATHS = [
     "_templates",
     "internal/mcp_server_wiki.py",
     "internal/prompts",
-    "pyproject.toml",
+    "tests",
 ]
 
-def sanitize_file(p: Path, target_is_brian: bool):
-    if not p.is_file() or p.suffix in [".lock", ".png", ".jpg", ".pyc"]:
-        return
-    try:
-        c = p.read_text(encoding="utf-8", errors="ignore")
-        if target_is_brian:
-            c = c.replace("k" + "rv-labs.md", "brian-overview.md")
-            c = c.replace("K" + "rv Labs", "My Org")
-            c = c.replace("K" + "rv-Labs", "Brian-Org")
-            c = c.replace("k" + "rv-labs", "brian-org")
-            c = c.replace("K" + "rv Wiki", "Brian Wiki")
-            c = c.replace("k" + "rv-wiki", "brian-wiki")
-            c = c.replace("k" + "rv_wiki", "brian_wiki")
-            c = c.replace("k" + "rv.ai", "example.com")
-            c = c.replace("K" + "rv", "Brian")
-            c = c.replace("k" + "rv", "brian")
-        if c != p.read_text(encoding="utf-8", errors="ignore"):
-            p.write_text(c, encoding="utf-8")
-    except Exception:
-        pass
+# Top-level / path prefixes that must never be written by sync (Brian-owned).
+BRIAN_OWNED_PATHS = frozenset(
+    {
+        "README.md",
+        "AGENTS.md",
+        "wiki.toml",
+        "uv.lock",
+        ".gitignore",
+        ".github",
+        "resources",
+        "wiki",
+        "raw",
+        "internal/registry.md",
+        "internal/skills",
+        "LICENSE",
+        "LICENSE.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+    }
+)
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: wiki-sync-engine <push|pull> <target_repo_path>")
-        print("Example: wiki-sync-engine push /Users/gathrid/Repos/brian")
-        sys.exit(1)
+# Files under ENGINE_PATHS that are Brian-local and must not be overwritten
+# even if a same-named file appears in KOS later. Overlay never deletes
+# Brian-only files missing from KOS; this set also blocks overwrite if KOS
+# ever gains a same-named path.
+BRIAN_OWNED_ENGINE_FILES = frozenset(
+    {
+        "wikicli/lifecycle/init.py",
+        "tests/lifecycle/test_init.py",
+    }
+)
 
-    action = sys.argv[1].lower()
-    target_path = Path(sys.argv[2]).resolve()
+ENGINE_COPY_DENY_SUFFIXES = {".pyc", ".pyo", ".lock"}
+ENGINE_COPY_DENY_DIR_NAMES = {
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".DS_Store",
+    ".venv",
+    "venv",
+    "node_modules",
+}
 
-    current_repo = Path(__file__).resolve().parent.parent
+BINARY_SUFFIXES = {
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".pyc",
+    ".pyo",
+    ".so",
+    ".dylib",
+    ".woff",
+    ".woff2",
+    ".ttf",
+}
 
-    if action == "push":
-        src_repo = current_repo
-        dst_repo = target_path
-    elif action == "pull":
-        src_repo = target_path
-        dst_repo = current_repo
-    else:
-        print(f"Unknown action '{action}'. Use 'push' or 'pull'.")
-        sys.exit(1)
+# pyproject identity keys preserved from Brian on merge.
+PYPROJECT_PRESERVE_PROJECT_KEYS = (
+    "name",
+    "description",
+    "readme",
+    "authors",
+    "maintainers",
+    "license",
+    "urls",
+    "keywords",
+    "classifiers",
+)
 
-    if not dst_repo.exists() or not (dst_repo / "pyproject.toml").exists():
-        print(f"❌ Error: Target directory '{dst_repo}' does not appear to be a valid wiki engine repository.")
-        sys.exit(1)
 
-    print(f"🔄 Syncing engine updates: {src_repo.name} -> {dst_repo.name}...")
+def _brand_replacements() -> list[tuple[str, str]]:
+    c = "k" + "rv"
+    C = "K" + "rv"
+    return [
+        (f"{c}-labs.md", "brian-overview.md"),
+        (f"{C} Labs", "My Org"),
+        (f"{C}-Labs", "Brian-Org"),
+        (f"{c}-labs", "brian-org"),
+        (f"{C} Wiki", "Brian Wiki"),
+        (f"{c}-wiki", "brian-wiki"),
+        (f"{c}_wiki", "brian_wiki"),
+        (f"team@{c}.ai", "team@example.com"),
+        (f"engineering@{c}.ai", "team@example.com"),
+        (f"engineering@{c}labs.com", "team@example.com"),
+        (f"@{c}.ai", "@example.com"),
+        (f"@{c}labs.com", "@example.com"),
+        (f"{c}.ai", "example.com"),
+        (f"{c}labs.com", "example.com"),
+        (C, "Brian"),
+        (c, "brian"),
+    ]
 
-    copied_count = 0
-    for rel_path in ENGINE_PATHS:
-        src = src_repo / rel_path
-        dst = dst_repo / rel_path
 
+def sanitize_text(content: str) -> str:
+    for old, new in _brand_replacements():
+        content = content.replace(old, new)
+        content = content.replace(old.lower(), new.lower())
+        content = content.replace(old.upper(), new.upper())
+    return content
+
+
+def should_skip_source_file(path: Path) -> bool:
+    if path.name in ENGINE_COPY_DENY_DIR_NAMES or path.name == ".DS_Store":
+        return True
+    if path.suffix.lower() in ENGINE_COPY_DENY_SUFFIXES:
+        return True
+    if any(part in ENGINE_COPY_DENY_DIR_NAMES for part in path.parts):
+        return True
+    return False
+
+
+def is_brian_owned(rel_posix: str) -> bool:
+    rel = rel_posix.replace("\\", "/")
+    if rel in BRIAN_OWNED_PATHS or rel in BRIAN_OWNED_ENGINE_FILES:
+        return True
+    for owned in BRIAN_OWNED_PATHS:
+        if rel == owned or rel.startswith(owned.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def looks_like_engine_repo(path: Path) -> bool:
+    return path.is_dir() and (path / "pyproject.toml").is_file()
+
+
+def default_brian_path(kos_root: Path) -> Path | None:
+    """Prefer ../brian, then BRIAN_REPO env, then common sibling names."""
+    env = os.environ.get("BRIAN_REPO") or os.environ.get("BRIAN_PATH")
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.extend(
+        [
+            kos_root.parent / "brian",
+            kos_root.parent / "Brian",
+            Path.home() / "Repos" / "brian",
+        ]
+    )
+    for c in candidates:
+        try:
+            resolved = c.resolve()
+        except OSError:
+            continue
+        if looks_like_engine_repo(resolved):
+            return resolved
+    return None
+
+
+def iter_engine_files(src_repo: Path) -> list[tuple[str, Path]]:
+    """Return (relative_posix, absolute_path) for every file under ENGINE_PATHS."""
+    out: list[tuple[str, Path]] = []
+    for rel in ENGINE_PATHS:
+        src = src_repo / rel
         if not src.exists():
             continue
+        if src.is_file():
+            if not should_skip_source_file(src):
+                out.append((rel.replace("\\", "/"), src))
+            continue
+        for p in src.rglob("*"):
+            if not p.is_file() or should_skip_source_file(p):
+                continue
+            rel_p = p.relative_to(src_repo).as_posix()
+            if is_brian_owned(rel_p):
+                continue
+            out.append((rel_p, p))
+    return out
 
-        if src.is_dir():
-            if dst.exists():
-                shutil.rmtree(dst)
-            shutil.copytree(src, dst)
-            if "brian" in dst_repo.name.lower():
-                for p in dst.rglob("*"):
-                    sanitize_file(p, target_is_brian=True)
-            print(f"  ✓ Synced directory: {rel_path}")
-            copied_count += 1
-        elif src.is_file():
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dst)
-            if "brian" in dst_repo.name.lower():
-                sanitize_file(dst, target_is_brian=True)
-            print(f"  ✓ Synced file: {rel_path}")
-            copied_count += 1
 
-    print(f"\n✨ Engine sync complete ({copied_count} items updated).")
+def read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
 
-    # If Brian repo, run leak check verification
+
+def sanitize_file_bytes_or_text(src: Path, sanitize: bool) -> bytes:
+    """Return content to write. Text files may be sanitized; binaries copied raw."""
+    if src.suffix.lower() in BINARY_SUFFIXES or not sanitize:
+        return src.read_bytes()
+    text = read_text(src)
+    if text is None:
+        return src.read_bytes()
+    return sanitize_text(text).encode("utf-8")
+
+
+def files_differ(src: Path, dst: Path, sanitize: bool) -> bool:
+    if not dst.exists():
+        return True
+    if src.suffix.lower() in BINARY_SUFFIXES or not sanitize:
+        return not filecmp.cmp(src, dst, shallow=False)
+    src_text = read_text(src)
+    dst_text = read_text(dst)
+    if src_text is None or dst_text is None:
+        return not filecmp.cmp(src, dst, shallow=False)
+    return sanitize_text(src_text) != dst_text
+
+
+def _extract_table_body(text: str, header: str) -> str | None:
+    """Return body of a TOML table including the header line, through next [table]."""
+    table = header.strip("[]")
+    pattern = re.compile(
+        rf"(?ms)^(\[{re.escape(table)}\]\n)(.*?)(?=^\[|\Z)",
+    )
+    m = pattern.search(text)
+    if not m:
+        return None
+    return m.group(1) + m.group(2)
+
+
+def _replace_or_insert_project_field(project_body: str, key: str, assignment_line: str) -> str:
+    """Replace key assignment inside a [project] body, or insert after header."""
+    multi = re.compile(
+        rf"(?ms)^({re.escape(key)}\s*=\s*)"
+        r"(?:(?:\[[^\]]*?\])|(?:\{[^\}]*?\})|(?:\"\"\".*?\"\"\")|(?:'''.*?''')|(?:\"[^\"]*\")|(?:'[^']*')|(?:[^\n]+))"
+        r"[^\n]*\n?"
+    )
+    if multi.search(project_body):
+        return multi.sub(assignment_line.rstrip() + "\n", project_body, count=1)
+    lines = project_body.splitlines(keepends=True)
+    if not lines:
+        return assignment_line.rstrip() + "\n"
+    return lines[0] + assignment_line.rstrip() + "\n" + "".join(lines[1:])
+
+
+def _get_project_assignment(project_body: str, key: str) -> str | None:
+    multi = re.compile(
+        rf"(?ms)^({re.escape(key)}\s*=\s*)"
+        r"((?:\[[^\]]*?\])|(?:\{[^\}]*?\})|(?:\"\"\".*?\"\"\")|(?:'''.*?''')|(?:\"[^\"]*\")|(?:'[^']*')|(?:[^\n]+))"
+        r"([^\n]*)\n?"
+    )
+    m = multi.search(project_body)
+    if not m:
+        return None
+    return m.group(0)
+
+
+def merge_pyproject(kos_text: str, brian_text: str) -> str:
+    """
+    Take engine-relevant sections from sanitized KOS pyproject, but keep Brian's
+    package identity fields (name, authors, description, etc.).
+
+    Preserved identity values are still brand-sanitized so a stale
+    engineering@-legacy email cannot ship to OSS.
+    """
+    kos = sanitize_text(kos_text)
+    result = kos
+
+    kos_proj = _extract_table_body(kos, "project")
+    brian_proj = _extract_table_body(brian_text, "project")
+    if not kos_proj or not brian_proj:
+        return sanitize_text(brian_text) if brian_text else kos
+
+    merged_proj = kos_proj
+    for key in PYPROJECT_PRESERVE_PROJECT_KEYS:
+        brian_assign = _get_project_assignment(brian_proj, key)
+        if brian_assign:
+            # Keep Brian's field choice, but strip company brand/domain leftovers.
+            merged_proj = _replace_or_insert_project_field(
+                merged_proj, key, sanitize_text(brian_assign)
+            )
+
+    result = re.sub(
+        r"(?ms)^(\[project\]\n)(.*?)(?=^\[|\Z)",
+        merged_proj if merged_proj.endswith("\n") else merged_proj + "\n",
+        result,
+        count=1,
+    )
+
+    if 'name = "brian-wiki"' in brian_text or "name = 'brian-wiki'" in brian_text:
+        result = re.sub(
+            r'(?m)^(name\s*=\s*)(".*?")',
+            r'\1"brian-wiki"',
+            result,
+            count=1,
+        )
+
+    return result
+
+
+def plan_pyproject(src_repo: Path, dst_repo: Path) -> tuple[str, str, bool]:
+    """Return (rel, new_text, changed)."""
+    kos_p = src_repo / "pyproject.toml"
+    bri_p = dst_repo / "pyproject.toml"
+    kos_text = kos_p.read_text(encoding="utf-8")
+    bri_text = bri_p.read_text(encoding="utf-8") if bri_p.exists() else ""
+    if bri_text:
+        merged = merge_pyproject(kos_text, bri_text)
+    else:
+        merged = sanitize_text(kos_text)
+        merged = re.sub(r'(?m)^name\s*=\s*".*?"', 'name = "brian-wiki"', merged, count=1)
+        merged = re.sub(
+            r"(?ms)^authors\s*=\s*\[.*?\]",
+            'authors = [\n    { name = "My Org", email = "team@example.com" }\n]',
+            merged,
+            count=1,
+        )
+    changed = (not bri_p.exists()) or (bri_text != merged)
+    return "pyproject.toml", merged, changed
+
+
+class Change:
+    __slots__ = ("rel", "action", "detail")
+
+    def __init__(self, rel: str, action: str, detail: str = ""):
+        self.rel = rel
+        self.action = action  # add | update | skip | merge
+        self.detail = detail
+
+
+def build_plan(src_repo: Path, dst_repo: Path, sanitize: bool) -> list[Change]:
+    changes: list[Change] = []
+
+    for rel, src in iter_engine_files(src_repo):
+        if is_brian_owned(rel):
+            changes.append(Change(rel, "skip", "brian-owned"))
+            continue
+        dst = dst_repo / rel
+        if not dst.exists():
+            changes.append(Change(rel, "add"))
+        elif files_differ(src, dst, sanitize=sanitize):
+            changes.append(Change(rel, "update"))
+        else:
+            changes.append(Change(rel, "skip", "identical"))
+
+    rel, _merged, changed = plan_pyproject(src_repo, dst_repo)
+    if changed:
+        changes.append(Change(rel, "merge", "preserve Brian identity"))
+    else:
+        changes.append(Change(rel, "skip", "pyproject identity+engine unchanged"))
+
+    return changes
+
+
+def apply_plan(
+    src_repo: Path,
+    dst_repo: Path,
+    changes: list[Change],
+    sanitize: bool,
+    dry_run: bool,
+) -> int:
+    applied = 0
+    for ch in changes:
+        if ch.action == "skip":
+            continue
+        dst = dst_repo / ch.rel
+        if ch.action == "merge" and ch.rel == "pyproject.toml":
+            _rel, merged, _ = plan_pyproject(src_repo, dst_repo)
+            if dry_run:
+                print(f"  ~ merge  {ch.rel}  ({ch.detail})")
+            else:
+                dst.write_text(merged, encoding="utf-8")
+                print(f"  ~ merge  {ch.rel}  ({ch.detail})")
+            applied += 1
+            continue
+
+        src = src_repo / ch.rel
+        if dry_run:
+            print(f"  {'+' if ch.action == 'add' else '~'} {ch.action:6} {ch.rel}")
+            applied += 1
+            continue
+
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        data = sanitize_file_bytes_or_text(src, sanitize=sanitize)
+        if dst.exists():
+            try:
+                if dst.read_bytes() == data:
+                    continue
+            except OSError:
+                pass
+        dst.write_bytes(data)
+        if src.stat().st_mode & 0o111:
+            dst.chmod(dst.stat().st_mode | 0o111)
+        print(f"  {'+' if ch.action == 'add' else '~'} {ch.action:6} {ch.rel}")
+        applied += 1
+    return applied
+
+
+def run_leak_check(dst_repo: Path) -> int:
     leak_check = dst_repo / "bin" / "wiki-leak-check"
-    if leak_check.exists():
-        print("\n🛡️ Verifying target repository with leak check...")
-        res = subprocess.run([str(leak_check)], cwd=dst_repo)
-        if res.returncode != 0:
-            print("❌ WARNING: Target repository failed leak check after sync!")
-            sys.exit(1)
+    if not leak_check.exists():
+        print("ERROR: wiki-leak-check missing in destination after sync (fail closed).")
+        return 1
+    print("\nVerifying destination working tree with leak check...")
+    res = subprocess.run([sys.executable, str(leak_check)], cwd=dst_repo, check=False)
+    if res.returncode != 0:
+        print("LEAK CHECK FAILED after sync.")
+        return res.returncode or 1
+    return 0
+
+
+def summarize(changes: list[Change]) -> tuple[int, int, int]:
+    adds = sum(1 for c in changes if c.action == "add")
+    updates = sum(1 for c in changes if c.action in {"update", "merge"})
+    skips = sum(1 for c in changes if c.action == "skip")
+    return adds, updates, skips
+
+
+def cmd_status_or_push(args: argparse.Namespace, kos_root: Path) -> int:
+    target = args.target_repo_path
+    if target is None:
+        target = default_brian_path(kos_root)
+        if target is None:
+            print(
+                "ERROR: No Brian repo found. Pass a path or clone brian next to kos "
+                f"({kos_root.parent / 'brian'})."
+            )
+            return 1
+    else:
+        target = target.expanduser().resolve()
+
+    if not looks_like_engine_repo(target):
+        print(f"ERROR: '{target}' is not a valid wiki engine repository.")
+        return 1
+
+    if target.resolve() == kos_root.resolve():
+        print("ERROR: Refusing to sync a repo onto itself.")
+        return 1
+
+    sanitize = not args.no_sanitize
+    dry_run = args.dry_run or args.action == "status"
+
+    print(f"{'Planning' if dry_run else 'Syncing'} engine: {kos_root.name} -> {target}")
+    print(f"  mode={'dry-run' if dry_run else 'apply'}  sanitize={sanitize}")
+    print(
+        "  preserves: README.md, resources/, wiki/, raw/, "
+        "Brian-only engine files, pyproject identity"
+    )
+
+    changes = build_plan(kos_root, target, sanitize=sanitize)
+    adds, updates, skips = summarize(changes)
+
+    actionable = [c for c in changes if c.action != "skip"]
+    if args.verbose or dry_run:
+        for c in changes:
+            if c.action == "skip" and not args.verbose:
+                continue
+            mark = {"add": "+", "update": "~", "merge": "~", "skip": "."}[c.action]
+            extra = f"  ({c.detail})" if c.detail else ""
+            print(f"  {mark} {c.action:6} {c.rel}{extra}")
+
+    print(f"\n  summary: {adds} add, {updates} update/merge, {skips} unchanged/skipped")
+
+    if not actionable:
+        print("Already up to date.")
+        if not dry_run and not args.skip_leak_check:
+            return run_leak_check(target)
+        return 0
+
+    if dry_run and args.action == "status":
+        print("\nRun: bin/wiki-sync-engine push   # apply")
+        return 0
+
+    if dry_run:
+        print("\nDry run only — no files written.")
+        return 0
+
+    try:
+        applied = apply_plan(kos_root, target, changes, sanitize=sanitize, dry_run=False)
+    except OSError as exc:
+        print(f"ERROR during sync (fail closed): {exc}")
+        return 1
+
+    print(f"\nEngine sync complete ({applied} file(s) written).")
+    print("Brian-owned paths left untouched (README, resources, wiki, …).")
+
+    if not args.skip_leak_check:
+        return run_leak_check(target)
+    return 0
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="wiki-sync-engine",
+        description=(
+            "Push KOS engine improvements into the Brian open-source repo "
+            "without clobbering Brian-specific files."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            "  bin/wiki-sync-engine push\n"
+            "  bin/wiki-sync-engine push ~/Repos/brian\n"
+            "  bin/wiki-sync-engine push --dry-run\n"
+            "  bin/wiki-sync-engine status\n"
+            "\n"
+            "env:\n"
+            "  BRIAN_REPO / BRIAN_PATH   override default ../brian lookup\n"
+        ),
+    )
+    parser.add_argument(
+        "action",
+        choices=("push", "status"),
+        help="push = apply engine overlay to Brian; status = show pending changes",
+    )
+    parser.add_argument(
+        "target_repo_path",
+        nargs="?",
+        type=Path,
+        default=None,
+        help="Brian repo path (default: ../brian or $BRIAN_REPO)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show planned writes without modifying the destination",
+    )
+    parser.add_argument(
+        "--no-sanitize",
+        action="store_true",
+        help="Disable brand sanitization (dangerous; not for public targets)",
+    )
+    parser.add_argument(
+        "--skip-leak-check",
+        action="store_true",
+        help="Skip post-sync leak check (dangerous)",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Also list unchanged/skipped files",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv if argv is not None else sys.argv[1:])
+    kos_root = Path(__file__).resolve().parent.parent
+    if args.action in {"push", "status"}:
+        return cmd_status_or_push(args, kos_root)
+    print(f"Unknown action {args.action}")
+    return 1
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

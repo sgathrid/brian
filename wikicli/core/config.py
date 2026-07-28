@@ -27,6 +27,9 @@ class WikiConfig:
         self.upkeep_triggers: list[str] = []
         self.upkeep_instructions: str = ""
 
+        self.use_case: str = "company"
+        self.agent_rules: list[str] = []
+
         self._load()
 
     def _load(self) -> None:
@@ -48,6 +51,8 @@ class WikiConfig:
         self.short_name = wiki_sec.get("short_name", self.short_name)
         self.description = wiki_sec.get("description", self.description)
         self.version = wiki_sec.get("version", self.version)
+        self.use_case = wiki_sec.get("use_case", self.use_case)
+        self.agent_rules = wiki_sec.get("agent_rules", self.agent_rules)
 
         paths_sec = data.get("paths", {})
         if "data_dir" in paths_sec:

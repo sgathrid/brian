@@ -162,11 +162,21 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
 
     upkeep = f"## Keeping it current\n{upkeep_text.strip()}\n\n" if upkeep_text else ""
 
+    rules_block = ""
+    if config.agent_rules:
+        from .init import ALL_AGENT_RULES
+        rule_lines = []
+        for r_key in config.agent_rules:
+            if r_key in ALL_AGENT_RULES:
+                rule_lines.append(ALL_AGENT_RULES[r_key]["prompt_rule"])
+        if rule_lines:
+            rules_block = "## Active agent rules\n" + "\n".join(rule_lines) + "\n\n"
+
     freshness = ""
     if sync_result.fresh is not True:
         freshness = f"## Wiki freshness\nLocal company context may not match `origin/main`: {sync_result.detail}.\n\n"
 
-    full_payload = f"{preamble}{freshness}{upkeep}{situated_block}{company_block}{catalog_block}"
+    full_payload = f"{preamble}{freshness}{rules_block}{upkeep}{situated_block}{company_block}{catalog_block}"
 
     return json.dumps(
         {

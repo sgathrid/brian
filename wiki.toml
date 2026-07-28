@@ -1,10 +1,24 @@
 # wiki.toml - Brian Knowledge Base Engine Manifest
+# Edit freely. agent_rules = optional behaviors (see README → Customize).
+# Re-run `wiki init` anytime, or change values here and restart your agents.
+#
+# Optional agent_rules (comma-separated list):
+#   people_tracking  — keep pages for teammates, roles, ownership
+#   asset_tracking   — laptops, licenses, access SOPs
+#   security_notice  — never write secrets into wiki pages
+#   adrs             — record architecture decisions
+#   strict_sources   — require raw/ citations on new claims
+#   quick_capture    — fast personal note synthesis
+# Example to enable people tracking:
+#   agent_rules = ["people_tracking"]
 
 [wiki]
 name = "Brian Knowledge Base"
 short_name = "Brian Wiki"
-description = "Open-source agentic knowledge base — cross-LLM brain & context engine"
+description = "Company knowledge base — business, product, and operational context for Brian Knowledge Base"
 version = "0.1.0"
+use_case = "company"
+agent_rules = []
 
 [paths]
 data_dir = "wiki"
