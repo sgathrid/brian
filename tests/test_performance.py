@@ -49,7 +49,7 @@ def build_corpus(root: Path, count: int) -> None:
             f'---\ntitle: "Page {i}"\ntype: concept\nscope: project\n'
             f'summary: "Summary of page {i}."\n'
             f"context_keys: [key-{i}, alt-{i}]\ntags: [t{i % 40}, shared]\n"
-            f"repo: git@github.com:Brian-Org/repo-{i}.git\nupdated: 2026-01-01\n---\n\n{BODY}\n",
+            f"repo: git@github.com:Brian-Overview/repo-{i}.git\nupdated: 2026-01-01\n---\n\n{BODY}\n",
             encoding="utf-8",
         )
 

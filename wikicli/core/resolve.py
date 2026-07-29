@@ -106,7 +106,7 @@ def _norm(text: str) -> str:
 def _repo_basename(repo: str) -> str:
     """Extracts the repo name from a git remote or path.
 
-    `repo:` holds a portable remote such as `git@github.com:Brian-Org/pulsar.git`, but the session
+    `repo:` holds a portable remote such as `git@github.com:Brian-Overview/pulsar.git`, but the session
     only ever knows a local cwd. Matching the whole remote can therefore never succeed — the
     resolver must compare the basename (`pulsar`), which is what CONVENTIONS.md documents.
     """
