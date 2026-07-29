@@ -31,9 +31,7 @@ def _clean_company_rel_path(raw: str, default_slug: str) -> str:
     p = Path(raw)
     name = p.name if p.name.endswith(".md") else f"{p.name}.md"
     raw_str = str(p)
-    if raw_str.startswith("wiki/entities/"):
-        return raw_str if raw_str.endswith(".md") else f"{raw_str}.md"
-    elif raw_str.startswith("wiki/"):
+    if raw_str.startswith("wiki/"):
         return raw_str if raw_str.endswith(".md") else f"{raw_str}.md"
     else:
         return f"wiki/entities/{name}"
