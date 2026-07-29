@@ -33,7 +33,8 @@ def _agent_behavior_lines(repo_root: Path) -> list[str]:
     """Short 'what agents will do' card from wiki.toml."""
     cfg = WikiConfig(repo_root)
     key = (cfg.upkeep_proactivity or "selective").strip().lower()
-    proactivity = PROACTIVITY_LABELS.get(key, PROACTIVITY_LABELS["selective"])
+    if key not in PROACTIVITY_LABELS:
+        key = "selective"
     n_triggers = len([t for t in cfg.upkeep_triggers if str(t).strip()])
     labels: list[str] = []
     if cfg.agent_rules:
@@ -44,12 +45,12 @@ def _agent_behavior_lines(repo_root: Path) -> list[str]:
                 labels.append(meta["label"])
             else:
                 labels.append(rid)
-    rules = ", ".join(labels) if labels else "none (defaults)"
+    rules = ", ".join(labels) if labels else "none"
     return [
         "What agents will do",
-        f"  proactivity: {proactivity}",
+        f"  proactivity: {key}",
         f"  rules: {rules}",
-        f"  triggers: {n_triggers} (session start ships triggers + instructions)",
+        f"  triggers: {n_triggers}",
     ]
 
 

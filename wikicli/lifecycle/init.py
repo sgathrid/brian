@@ -767,20 +767,29 @@ def run_init(
                 existing_upkeep, selected_use_case, selected_proactivity, None
             )
 
-            want_upkeep = run_confirm(
-                "Customize what agents offer to save? (triggers & instructions)",
-                default=False,
-                title="Brian setup",
-                confirm_label="edit triggers / instructions",
-                cancel_label="keep current",
+            # Fine-tune triggers only when selective (use-case pack) or when re-running
+            # the same posture with existing text. active/capture/silent *are* the control.
+            prior_proactivity = existing_proactivity or "selective"
+            offer_upkeep_edit = selected_proactivity == "selective" or (
+                is_rerun
+                and prior_proactivity == selected_proactivity
+                and _existing_upkeep_pair(existing_upkeep) is not None
             )
-            if want_upkeep:
-                custom_upkeep = _customize_upkeep_interactively(
-                    selected_use_case,
-                    upkeep_triggers_preview,
-                    upkeep_instructions_preview,
+            if offer_upkeep_edit:
+                want_upkeep = run_confirm(
+                    "Fine-tune triggers & instructions?",
+                    default=False,
+                    title="Brian setup",
+                    confirm_label="edit text",
+                    cancel_label="keep current",
                 )
-                upkeep_triggers_preview, upkeep_instructions_preview = custom_upkeep
+                if want_upkeep:
+                    custom_upkeep = _customize_upkeep_interactively(
+                        selected_use_case,
+                        upkeep_triggers_preview,
+                        upkeep_instructions_preview,
+                    )
+                    upkeep_triggers_preview, upkeep_instructions_preview = custom_upkeep
 
             company_rel_path = _clean_company_rel_path(company_file_slug, default_slug)
             enabled_rule_labels = [ALL_AGENT_RULES[r]["label"] for r in parsed_rules if r in ALL_AGENT_RULES]

@@ -389,7 +389,8 @@ def test_run_init_posture_change_rewrites_upkeep(tmp_path: Path, monkeypatch):
     capture_first = init_mod.UPKEEP_POSTURES["capture"]["triggers"][0]
     assert old_first != capture_first
 
-    confirm_answers = iter([False, False, True])  # rules N, upkeep N, save Y
+    # capture/active/silent skip the fine-tune step — only rules? + save?
+    confirm_answers = iter([False, True])  # rules N, save Y
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
 
     def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
@@ -438,7 +439,8 @@ def test_run_init_legacy_manifest_applies_new_posture(tmp_path: Path, monkeypatc
     old_first = legacy["upkeep"]["triggers"][0]
     active_first = init_mod.UPKEEP_POSTURES["active"]["triggers"][0]
 
-    confirm_answers = iter([False, False, True])
+    # active posture skips fine-tune — only rules? + save?
+    confirm_answers = iter([False, True])
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
 
     def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
