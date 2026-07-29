@@ -255,6 +255,12 @@ def _normalize_proactivity(raw: object) -> str:
     return key if key in UPKEEP_POSTURES else ""
 
 
+def _normalize_upkeep_pair(triggers: list[str], instructions: str) -> tuple[tuple[str, ...], str]:
+    """Canonical form for comparing stock packs vs hand-edited text."""
+    cleaned = tuple(str(t).strip() for t in triggers if str(t).strip())
+    return cleaned, str(instructions or "").strip()
+
+
 def _upkeep_for_posture(use_case: str, proactivity: str) -> tuple[list[str], str]:
     """Resolve triggers/instructions for a posture (selective → use-case preset)."""
     posture = UPKEEP_POSTURES.get(proactivity) or UPKEEP_POSTURES["selective"]
@@ -278,24 +284,56 @@ def _existing_upkeep_pair(existing_upkeep: dict) -> tuple[list[str], str] | None
     return triggers, instructions
 
 
+def _matches_stock_pack(
+    pair: tuple[list[str], str],
+    use_case: str,
+    proactivity: str,
+) -> bool:
+    """True when pair equals the stock pack for this use_case + posture."""
+    stock = _upkeep_for_posture(use_case, proactivity)
+    return _normalize_upkeep_pair(*pair) == _normalize_upkeep_pair(*stock)
+
+
 def _resolve_upkeep(
     existing_upkeep: dict,
     use_case: str,
     proactivity: str,
     custom: tuple[list[str], str] | None,
+    *,
+    prior_use_case: str = "",
 ) -> tuple[list[str], str]:
     """Resolve triggers/instructions for write + preview.
 
-    Order: this-run custom edit → keep existing text if posture unchanged → posture pack.
+    Order:
+      1. this-run custom edit
+      2. same posture + existing text that is still stock for the *prior* use case
+         and use case changed → apply pack for the *new* use case (selective packs)
+      3. same posture + any other existing text → preserve (hand edits win)
+      4. posture pack for the chosen use case
+
     Missing/invalid prior proactivity is treated as selective (legacy manifests).
+    Non-selective postures are use-case-independent; only selective packs vary by use case.
     """
     if custom is not None:
         return custom
+
     prior = _normalize_proactivity(existing_upkeep.get("proactivity")) or "selective"
     chosen = proactivity if proactivity in UPKEEP_POSTURES else "selective"
     preserved = _existing_upkeep_pair(existing_upkeep)
+
     if preserved is not None and prior == chosen:
+        prior_uc = (prior_use_case or "").strip()
+        if (
+            prior_uc
+            and prior_uc != use_case
+            and prior_uc in USE_CASE_PRESETS
+            and use_case in USE_CASE_PRESETS
+            and _matches_stock_pack(preserved, prior_uc, chosen)
+        ):
+            # Stock text from the old preset — refresh to the new use-case pack.
+            return _upkeep_for_posture(use_case, chosen)
         return preserved
+
     return _upkeep_for_posture(use_case, chosen)
 
 RULE_HELP_TEXT = (
@@ -766,7 +804,11 @@ def run_init(
             selected_proactivity = _select_proactivity_interactively(selected_proactivity)
             proactivity_resolved = True
             upkeep_triggers_preview, upkeep_instructions_preview = _resolve_upkeep(
-                existing_upkeep, selected_use_case, selected_proactivity, None
+                existing_upkeep,
+                selected_use_case,
+                selected_proactivity,
+                None,
+                prior_use_case=existing_use_case,
             )
 
             # Fine-tune triggers only when selective (use-case pack) or when re-running
@@ -870,7 +912,11 @@ def run_init(
         selected_proactivity = existing_proactivity or "selective"
 
     upkeep_triggers, upkeep_instructions = _resolve_upkeep(
-        existing_upkeep, selected_use_case, selected_proactivity, custom_upkeep
+        existing_upkeep,
+        selected_use_case,
+        selected_proactivity,
+        custom_upkeep,
+        prior_use_case=existing_use_case,
     )
 
     # Escape quotes in trigger strings for TOML double-quoted items.

@@ -495,3 +495,126 @@ def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
     assert cfg.upkeep_triggers
     assert cfg.upkeep_triggers[0] in ctx
     assert "never commit" in ctx.lower() or "Never commit" in ctx
+
+def test_resolve_upkeep_refreshes_stock_on_use_case_change():
+    """Company stock + selective → engineering applies engineering pack."""
+    from wikicli.lifecycle import init as init_mod
+
+    company = init_mod._upkeep_for_posture("company", "selective")
+    engineering = init_mod._upkeep_for_posture("engineering", "selective")
+    assert company != engineering
+
+    existing = {
+        "proactivity": "selective",
+        "triggers": list(company[0]),
+        "instructions": company[1],
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "engineering", "selective", None, prior_use_case="company"
+    )
+    assert got == engineering
+
+
+def test_resolve_upkeep_preserves_custom_on_use_case_change():
+    """Hand-edited selective text survives use-case switch."""
+    from wikicli.lifecycle import init as init_mod
+
+    custom_t = ["My custom trigger that is not stock"]
+    custom_i = "My custom instructions."
+    existing = {
+        "proactivity": "selective",
+        "triggers": custom_t,
+        "instructions": custom_i,
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "engineering", "selective", None, prior_use_case="company"
+    )
+    assert got == (custom_t, custom_i)
+
+
+def test_resolve_upkeep_same_use_case_preserves_stock():
+    """Re-run same use case keeps stock text (no spurious rewrite)."""
+    from wikicli.lifecycle import init as init_mod
+
+    company = init_mod._upkeep_for_posture("company", "selective")
+    existing = {
+        "proactivity": "selective",
+        "triggers": list(company[0]),
+        "instructions": company[1],
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "company", "selective", None, prior_use_case="company"
+    )
+    assert got == company
+
+
+def test_run_init_use_case_change_refreshes_selective_stock(tmp_path: Path):
+    """Non-interactive company → engineering swaps selective stock packs."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        use_case="company",
+        name="Swap Co",
+        company_file_slug="swap-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        before = tomllib.load(f)
+    assert before["wiki"]["use_case"] == "company"
+    company_first = before["upkeep"]["triggers"][0]
+    eng_first = init_mod._upkeep_for_posture("engineering", "selective")[0][0]
+    assert company_first != eng_first
+
+    assert run_init(
+        tmp_path,
+        use_case="engineering",
+        name="Swap Co",
+        company_file_slug="swap-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        after = tomllib.load(f)
+    assert after["wiki"]["use_case"] == "engineering"
+    assert after["upkeep"]["proactivity"] == "selective"
+    assert after["upkeep"]["triggers"][0] == eng_first
+    assert company_first not in after["upkeep"]["triggers"]
+    assert "adrs" in after["wiki"]["agent_rules"]
+
+
+def test_run_init_use_case_change_keeps_custom_upkeep(tmp_path: Path):
+    """Custom selective text is not wiped when use case changes."""
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        use_case="company",
+        name="Custom Keep Co",
+        company_file_slug="custom-keep",
+        non_interactive=True,
+    )
+    toml_path = tmp_path / "wiki.toml"
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    # Rewrite with a clearly non-stock first trigger while keeping selective posture.
+    triggers = list(data["upkeep"]["triggers"])
+    triggers[0] = "CUSTOM_KEEP_TRIGGER"
+    data["upkeep"]["triggers"] = triggers
+    # Serialize minimally via run path: rewrite TOML triggers block from current file.
+    raw = toml_path.read_text(encoding="utf-8")
+    old_first = list(tomllib.loads(raw)["upkeep"]["triggers"])[0]
+    raw = raw.replace(old_first, "CUSTOM_KEEP_TRIGGER", 1)
+    toml_path.write_text(raw, encoding="utf-8")
+
+    assert run_init(
+        tmp_path,
+        use_case="engineering",
+        name="Custom Keep Co",
+        company_file_slug="custom-keep",
+        non_interactive=True,
+    )
+    with open(toml_path, "rb") as f:
+        after = tomllib.load(f)
+    assert after["wiki"]["use_case"] == "engineering"
+    assert after["upkeep"]["triggers"][0] == "CUSTOM_KEEP_TRIGGER"
+

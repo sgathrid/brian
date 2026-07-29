@@ -386,7 +386,7 @@ Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you c
 - **Connected tools** → `wiki install` / `wiki uninstall`
 - **How agents talk about the wiki** → `_templates/agent-pointer.md` + `internal/skills/wiki-context/`
 
-**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh. Changing **use case** refreshes default agent rules for that preset; selective trigger text is kept if you already customized it (or if proactivity stayed selective without an edit pass).
+**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh. Changing **use case** refreshes default agent rules for that preset. Selective trigger/instruction text that still matches the *old* use-case stock pack is refreshed to the new pack; hand-edited text is kept.
 
 Everything important is text. Fork it and make it yours.
 
