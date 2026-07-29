@@ -161,7 +161,7 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
     upkeep = format_upkeep_block(
         config.upkeep_triggers,
         config.upkeep_instructions,
-        getattr(config, "upkeep_proactivity", ""),
+        config.upkeep_proactivity,
     )
 
     # Optional agent_rules from wiki.toml. No-op when empty or when init catalog

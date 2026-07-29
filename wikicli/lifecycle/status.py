@@ -59,8 +59,10 @@ def run_status(repo_root: Path) -> None:
     home = Path.home()
     local_bin = home / ".local" / "bin" / "wiki"
     source_wiki = repo_root / "bin" / "wiki"
+    cfg = WikiConfig(repo_root)
+    title = f"{cfg.short_name} Agent Status"
 
-    print(f"┌  {C_BOLD}Brian Wiki Agent Status{C_RESET}")
+    print(f"┌  {C_BOLD}{title}{C_RESET}")
     print("│")
     print(f"│  repo: {repo_root}")
     print("│")

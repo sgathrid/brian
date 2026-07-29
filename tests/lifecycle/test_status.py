@@ -12,6 +12,7 @@ def test_agent_behavior_lines_from_manifest(tmp_path: Path):
         """
 [wiki]
 name = "Status Co"
+short_name = "StatusWiki"
 agent_rules = ["adrs"]
 
 [upkeep]
@@ -26,16 +27,23 @@ instructions = \"\"\"Ask first.\"\"\"
     assert "What agents will do" in joined
     assert "capture" in joined
     assert "triggers: 2" in joined
-    assert "architecture" in joined.lower() or "adrs" in joined.lower() or "Record" in joined
+    # Catalog present (Brian init) → label; absent (KOS) → raw id
+    assert (
+        "adrs" in joined
+        or "architecture" in joined.lower()
+        or "Record" in joined
+    )
 
 
 def test_run_status_prints_behavior_card(tmp_path: Path, capsys):
     (tmp_path / "wiki").mkdir()
     (tmp_path / "wiki.toml").write_text(
-        '[wiki]\nname = "S"\n\n[upkeep]\nproactivity = "silent"\ntriggers = ["Ask"]\n',
+        '[wiki]\nname = "S"\nshort_name = "S Wiki"\n\n'
+        '[upkeep]\nproactivity = "silent"\ntriggers = ["Ask"]\n',
         encoding="utf-8",
     )
     run_status(tmp_path)
     out = capsys.readouterr().out
     assert "What agents will do" in out
     assert "silent" in out
+    assert "S Wiki Agent Status" in out
