@@ -116,8 +116,8 @@ AGENT_SPECS: list[AgentSpec] = [
         id="antigravity",
         name="Google Antigravity",
         status_heading="Google Antigravity (~/.gemini/GEMINI.md)",
-        active_msg="import line present in ~/.gemini/GEMINI.md",
-        absent_msg="import line not found in ~/.gemini/GEMINI.md",
+        active_msg="import and read/write permissions configured",
+        absent_msg="import and read/write permissions not configured",
         get_config_path=lambda home: home / ".gemini" / "GEMINI.md",
     ),
 ]
@@ -348,6 +348,46 @@ def add_json_list(data: dict, keys: tuple[str, ...], values: list[str]) -> list[
     return added
 
 
+def antigravity_import_line(repo_root: Path) -> str:
+    return "@import " + str(repo_root / "_templates" / "agent-pointer.md")
+
+
+def antigravity_permission_rules(repo_root: Path) -> list[str]:
+    root = str(repo_root.resolve())
+    return [f"read_file({root})", f"write_file({root})"]
+
+
+def _antigravity_pointer_state(text: str, expected: str) -> str:
+    occurrences = text.count(expected)
+    if occurrences == 0:
+        return "absent"
+    return "active" if occurrences == 1 and text.splitlines().count(expected) == 1 else "stale"
+
+
+def remove_antigravity_import(text: str, expected: str) -> tuple[str, bool]:
+    """Remove exact wiki imports, including the concatenated form shipped by older installers."""
+    if expected not in text:
+        return text, False
+
+    kept: list[str] = []
+    for line in text.splitlines(keepends=True):
+        body = line.rstrip("\r\n")
+        ending = line[len(body) :]
+        if body == expected:
+            continue
+        kept.append(body.replace(expected, "") + ending)
+    return "".join(kept), True
+
+
+def ensure_antigravity_import(text: str, expected: str) -> tuple[str, bool]:
+    """Ensure one standalone import without changing surrounding agent rules."""
+    if _antigravity_pointer_state(text, expected) == "active":
+        return text, False
+    cleaned, _ = remove_antigravity_import(text, expected)
+    separator = "" if not cleaned or cleaned.endswith(("\n", "\r")) else "\n"
+    return cleaned + separator + expected + "\n", True
+
+
 def remove_json_list(data: dict, keys: tuple[str, ...], values: list[str]) -> bool:
     parent = data
     for key in keys[:-1]:
@@ -434,6 +474,43 @@ def _claude_desktop_state(home: Path, repo_root: Path) -> str:
     return "stale" if "brian-wiki" in text else "absent"
 
 
+def _antigravity_permissions_state(path: Path, repo_root: Path) -> str:
+    expected = set(antigravity_permission_rules(repo_root))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return "absent"
+    try:
+        data = json.loads(text)
+        allowed = data.get("permissions", {}).get("allow", [])
+    except (AttributeError, json.JSONDecodeError):
+        return "stale" if any(rule in text for rule in expected) else "absent"
+    if not isinstance(allowed, list):
+        return "absent"
+    present = {rule for rule in allowed if isinstance(rule, str)}
+    if expected <= present:
+        return "active"
+    return "stale" if expected & present else "absent"
+
+
+def _antigravity_state(home: Path, repo_root: Path) -> str:
+    expected_import = antigravity_import_line(repo_root)
+    try:
+        pointer_text = (home / ".gemini" / "GEMINI.md").read_text(encoding="utf-8")
+    except OSError:
+        pointer_state = "absent"
+    else:
+        pointer_state = _antigravity_pointer_state(pointer_text, expected_import)
+    permissions_state = _antigravity_permissions_state(
+        home / ".gemini" / "antigravity-cli" / "settings.json", repo_root
+    )
+    if pointer_state == permissions_state == "active":
+        return "active"
+    if pointer_state != "absent" or permissions_state != "absent":
+        return "stale"
+    return "absent"
+
+
 def integration_state(agent: str, home: Path, repo_root: Path) -> str:
     """Return ``active``, ``stale``, or ``absent`` using the integration's real schema."""
     if agent == "claude":
@@ -457,10 +534,5 @@ def integration_state(agent: str, home: Path, repo_root: Path) -> str:
         expected = (repo_root / "internal" / "skills" / "wiki-context").resolve()
         return "active" if path.is_symlink() and path.resolve() == expected else "absent"
     if agent == "antigravity":
-        path = home / ".gemini" / "GEMINI.md"
-        expected_import = "@import " + str(repo_root / "_templates" / "agent-pointer.md")
-        try:
-            return "active" if expected_import in path.read_text(encoding="utf-8").splitlines() else "absent"
-        except OSError:
-            return "absent"
+        return _antigravity_state(home, repo_root)
     return "absent"

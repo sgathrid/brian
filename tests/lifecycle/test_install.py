@@ -404,6 +404,77 @@ class TestGemini:
         assert (fake_home / ".gemini/skills/wiki-context").resolve() == repo_root() / "internal/skills/wiki-context"
 
 
+class TestAntigravity:
+    @staticmethod
+    def import_line() -> str:
+        return f"@import {repo_root() / '_templates/agent-pointer.md'}"
+
+    @staticmethod
+    def permission_rules() -> list[str]:
+        root = repo_root().resolve()
+        return [f"read_file({root})", f"write_file({root})"]
+
+    def test_foreign_rules_without_final_newline_do_not_clobber_import(self, fake_home: Path):
+        gemini_md = fake_home / ".gemini/GEMINI.md"
+        foreign_rules = "<!-- lean-ctx-rules -->\nKeep this foreign rule.\n<!-- /lean-ctx-rules -->"
+        gemini_md.write_text(foreign_rules, encoding="utf-8")
+
+        assert run_install(repo_root(), ["antigravity"])
+
+        assert gemini_md.read_text(encoding="utf-8") == f"{foreign_rules}\n{self.import_line()}\n"
+        assert integration_state("antigravity", fake_home, repo_root()) == "active"
+
+        installed = gemini_md.read_text(encoding="utf-8")
+        assert run_install(repo_root(), ["antigravity"])
+        assert gemini_md.read_text(encoding="utf-8") == installed
+
+    def test_reinstall_repairs_legacy_concatenated_import(self, fake_home: Path):
+        gemini_md = fake_home / ".gemini/GEMINI.md"
+        gemini_md.write_text(f"Keep this rule.{self.import_line()}\n", encoding="utf-8")
+
+        assert run_install(repo_root(), ["antigravity"])
+
+        assert gemini_md.read_text(encoding="utf-8") == f"Keep this rule.\n{self.import_line()}\n"
+        assert integration_state("antigravity", fake_home, repo_root()) == "active"
+
+    @pytest.mark.parametrize(
+        ("has_pointer", "has_permissions", "expected"),
+        [
+            (False, False, "absent"),
+            (True, False, "stale"),
+            (False, True, "stale"),
+            (True, True, "active"),
+        ],
+    )
+    def test_state_requires_pointer_and_permissions(
+        self, fake_home: Path, has_pointer: bool, has_permissions: bool, expected: str
+    ):
+        if has_pointer:
+            (fake_home / ".gemini/GEMINI.md").write_text(self.import_line() + "\n", encoding="utf-8")
+        if has_permissions:
+            settings = fake_home / ".gemini/antigravity-cli/settings.json"
+            settings.parent.mkdir(parents=True, exist_ok=True)
+            settings.write_text(json.dumps({"permissions": {"allow": self.permission_rules()}}), encoding="utf-8")
+
+        assert integration_state("antigravity", fake_home, repo_root()) == expected
+
+    def test_pointer_with_invalid_permission_settings_is_stale(self, fake_home: Path):
+        (fake_home / ".gemini/GEMINI.md").write_text(self.import_line() + "\n", encoding="utf-8")
+        settings = fake_home / ".gemini/antigravity-cli/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text("not json", encoding="utf-8")
+
+        assert integration_state("antigravity", fake_home, repo_root()) == "stale"
+
+    def test_uninstall_repairs_legacy_concatenated_import(self, fake_home: Path):
+        gemini_md = fake_home / ".gemini/GEMINI.md"
+        gemini_md.write_text(f"Keep this rule.{self.import_line()}\n", encoding="utf-8")
+
+        run_uninstall(repo_root(), ["antigravity"])
+
+        assert gemini_md.read_text(encoding="utf-8") == "Keep this rule.\n"
+
+
 class TestPathLinks:
     def test_links_the_single_cli_entrypoint(self, fake_home: Path):
         run_install(repo_root(), ["claude"])
@@ -466,7 +537,7 @@ class TestPathLinks:
         assert run_install(repo_root(), ["antigravity"])
 
         pointer = repo_root() / "_templates/agent-pointer.md"
-        assert f"@import {pointer}" in (fake_home / ".gemini/GEMINI.md").read_text(encoding="utf-8")
+        assert (fake_home / ".gemini/GEMINI.md").read_text(encoding="utf-8").splitlines() == [f"@import {pointer}"]
         text = pointer.read_text(encoding="utf-8")
         assert "wiki knowledge query" in text
         assert "wiki knowledge read" in text
@@ -886,7 +957,18 @@ class TestStatus:
         run_status(repo_root())
 
         out = capsys.readouterr().out
-        assert "stale wiki hook configuration" in out
+        assert "stale or incomplete wiki integration" in out
+        assert "Done. 0/7 agent integrations active." in out
+
+    def test_reports_partial_antigravity_setup_as_stale_not_active(self, fake_home: Path, capsys):
+        pointer = repo_root() / "_templates/agent-pointer.md"
+        (fake_home / ".gemini/GEMINI.md").write_text(f"@import {pointer}\n", encoding="utf-8")
+
+        run_status(repo_root())
+
+        out = capsys.readouterr().out
+        assert "Google Antigravity" in out
+        assert "stale or incomplete wiki integration" in out
         assert "Done. 0/7 agent integrations active." in out
 
 

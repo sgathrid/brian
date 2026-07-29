@@ -16,9 +16,12 @@ from .integrations import (
     _strip_codex_wiki_hooks,
     _strip_json_wiki_hooks,
     add_json_list,
+    antigravity_import_line,
+    antigravity_permission_rules,
     atomic_write_json,
     backup_path,
     claude_desktop_server_config,
+    ensure_antigravity_import,
     get_claude_desktop_config_path,
     get_detection_path,
     integration_state,
@@ -342,26 +345,26 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
             gemini_md_existed = gemini_md.is_file()
 
             print("│  Google Antigravity (~/.gemini/GEMINI.md)")
-            import_line = "@import " + str(repo_root / "_templates" / "agent-pointer.md") + "\n"
+            import_line = antigravity_import_line(repo_root)
 
             existing = gemini_md.read_text(encoding="utf-8") if gemini_md.is_file() else ""
-            if import_line not in existing:
+            updated, changed = ensure_antigravity_import(existing, import_line)
+            if changed:
                 if gemini_md.is_file():
                     shutil.copy2(gemini_md, backup_path(gemini_md))
-                gemini_md.write_text(existing + import_line, encoding="utf-8")
+                gemini_md.write_text(updated, encoding="utf-8")
                 if not gemini_md_existed:
                     record_owned_values(home, "antigravity", "createdFiles", [str(gemini_md)])
-                print(f"│    {S_CHECK_GREEN} added import → ~/.gemini/GEMINI.md")
+                print(f"│    {S_CHECK_GREEN} configured import → ~/.gemini/GEMINI.md")
             else:
                 print(f"│    {S_CHECK_GREEN} import line already present in ~/.gemini/GEMINI.md")
             agy_settings = home / ".gemini/antigravity-cli/settings.json"
             try:
                 agy_settings_existed = agy_settings.is_file()
                 agy_data = json.loads(agy_settings.read_text()) if agy_settings.is_file() else {}
-                root = str(repo_root.resolve())
-                added = add_json_list(agy_data, ("permissions", "allow"), [f"read_file({root})", f"write_file({root})"])
-                agy_settings.parent.mkdir(parents=True, exist_ok=True)
-                agy_settings.write_text(json.dumps(agy_data, indent=2), encoding="utf-8")
+                added = add_json_list(agy_data, ("permissions", "allow"), antigravity_permission_rules(repo_root))
+                if added or not agy_settings_existed:
+                    atomic_write_json(agy_settings, agy_data, create_backup=agy_settings_existed)
                 record_owned_values(home, "antigravity", "permissions.allow", added)
                 if not agy_settings_existed:
                     record_owned_values(home, "antigravity", "createdFiles", [str(agy_settings)])
