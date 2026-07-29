@@ -136,6 +136,7 @@ USE_CASE_PRESETS: dict[str, dict] = {
 }
 
 # Keys are stable IDs written to wiki.toml; labels/hints are what humans see in init.
+# Optional page_guidance is soft shape advice for agents (not an ingest schema).
 ALL_AGENT_RULES: dict[str, dict[str, str]] = {
     "people_tracking": {
         "label": "Track people & roles",
@@ -145,6 +146,10 @@ ALL_AGENT_RULES: dict[str, dict[str, str]] = {
             "manager hierarchies, contact channels, and personnel assignments. Create and update "
             "entity pages for team members under wiki/entities/ or wiki/people/."
         ),
+        "page_guidance": (
+            "Person page shape: name/title, role, team, manager [[link]], contact channel; "
+            "owns/collaborates-on wikilinks; type entity; tag people."
+        ),
     },
     "asset_tracking": {
         "label": "Track IT assets & access",
@@ -152,6 +157,10 @@ ALL_AGENT_RULES: dict[str, dict[str, str]] = {
         "prompt_rule": (
             "• IT Asset & Access SOPs: Track hardware assets, serial/asset IDs, software license "
             "assignments, and access request SOPs. Keep hardware and access procedures up to date."
+        ),
+        "page_guidance": (
+            "Asset page shape: asset tag/serial, type, assignee [[person]], status; "
+            "link access-request SOPs; never store secrets."
         ),
     },
     "security_notice": {
@@ -169,6 +178,9 @@ ALL_AGENT_RULES: dict[str, dict[str, str]] = {
         "prompt_rule": (
             "• Architectural Decision Records: Document system design choices, trade-offs, and "
             "architectural changes as structured ADR pages with Context, Decision, and Consequences."
+        ),
+        "page_guidance": (
+            "ADR shape: Context → Decision → Consequences; link related systems; tag adr."
         ),
     },
     "strict_sources": {
@@ -188,6 +200,82 @@ ALL_AGENT_RULES: dict[str, dict[str, str]] = {
         ),
     },
 }
+
+# How aggressively agents offer saves. triggers/instructions None → use-case preset.
+UPKEEP_POSTURES: dict[str, dict] = {
+    "selective": {
+        "title": "Selective",
+        "hint": "Durable, high-signal changes only (recommended default)",
+        "triggers": None,
+        "instructions": None,
+    },
+    "active": {
+        "title": "Active",
+        "hint": "Offer updates often; still ask before writing",
+        "triggers": [
+            "Any durable decision, policy, product, or process change worth remembering later",
+            "Shipping user-visible work, API/contract changes, or architecture shifts",
+            "Authoring or substantially revising docs that others will rely on",
+        ],
+        "instructions": (
+            "When in doubt, offer a concise wiki update. Say which page and why, then wait. "
+            "Never commit or push. Skip pure refactors, dependency bumps, tests, and formatting."
+        ),
+    },
+    "capture": {
+        "title": "Capture everything durable",
+        "hint": "Prefer logging; treat most durable context as worth saving",
+        "triggers": [
+            "Any fact, decision, relationship, or procedure someone might need later",
+            "Meeting outcomes, ownership changes, customer context, and operational details",
+            "Docs, plans, and status changes that would otherwise live only in chat or memory",
+        ],
+        "instructions": (
+            "Prefer capturing durable context in the wiki over leaving it only in conversation. "
+            "Propose concrete page adds/updates often; still ask before writing and never commit or push. "
+            "Treat 'already current' as uncommon — only when the wiki already reflects the same facts."
+        ),
+    },
+    "silent": {
+        "title": "Silent",
+        "hint": "Only update the wiki when the user asks",
+        "triggers": [
+            "The user explicitly asks to update, save, or log something in the wiki",
+        ],
+        "instructions": (
+            "Do not proactively offer wiki updates. When the user asks, propose the change, "
+            "wait for approval, and never commit or push."
+        ),
+    },
+}
+
+
+def _normalize_proactivity(raw: object) -> str:
+    key = str(raw or "").strip().lower()
+    return key if key in UPKEEP_POSTURES else ""
+
+
+def _upkeep_for_posture(use_case: str, proactivity: str) -> tuple[list[str], str]:
+    """Resolve triggers/instructions for a posture (selective → use-case preset)."""
+    posture = UPKEEP_POSTURES.get(proactivity) or UPKEEP_POSTURES["selective"]
+    if posture.get("triggers") is not None:
+        return list(posture["triggers"]), str(posture.get("instructions") or "").strip()
+    preset = USE_CASE_PRESETS.get(use_case) or USE_CASE_PRESETS["company"]
+    return list(preset["triggers"]), str(preset["instructions"]).strip()
+
+
+def _existing_upkeep_pair(existing_upkeep: dict) -> tuple[list[str], str] | None:
+    """Return preserved triggers/instructions when the manifest already has upkeep text."""
+    triggers: list[str] = []
+    raw_t = existing_upkeep.get("triggers")
+    if isinstance(raw_t, list):
+        triggers = [str(t) for t in raw_t if str(t).strip()]
+    elif isinstance(raw_t, str) and raw_t.strip():
+        triggers = [raw_t.strip()]
+    instructions = str(existing_upkeep.get("instructions") or "").strip()
+    if not triggers and not instructions:
+        return None
+    return triggers, instructions
 
 RULE_HELP_TEXT = (
     "Optional agent behavior rules (comma-separated). "
@@ -310,6 +398,26 @@ UPKEEP_EXAMPLES: dict[str, list[str]] = {
         "Changing a workflow, tool setup, or reference note",
     ],
 }
+
+
+def _select_proactivity_interactively(seed: str) -> str:
+    """Always-on short step: how aggressively agents offer saves."""
+    pre = seed if seed in UPKEEP_POSTURES else "selective"
+    print("│")
+    print(f"│  {C_BOLD}How proactive should agents be?{C_RESET} {C_DIM}([upkeep].proactivity){C_RESET}")
+    print(f"│  {C_DIM}Still always ask before writing · never auto-commit. Edit later in wiki.toml.{C_RESET}")
+    print("│")
+    options = [
+        (key, meta["title"], meta["hint"], key == pre)
+        for key, meta in UPKEEP_POSTURES.items()
+    ]
+    sel = run_menu(
+        "Upkeep proactivity",
+        options=options,
+        title="Brian setup",
+        single_select=True,
+    )
+    return sel if sel in UPKEEP_POSTURES else pre
 
 
 def _customize_upkeep_interactively(
@@ -538,6 +646,10 @@ def run_init(
     rules_resolved = rules_explicit
     # Interactive upkeep overrides; None means "resolve from preset/existing later".
     custom_upkeep: tuple[list[str], str] | None = None
+    existing_proactivity = _normalize_proactivity(existing_upkeep.get("proactivity"))
+    selected_proactivity = existing_proactivity or "selective"
+    # True when interactive path chose proactivity (or non-interactive keeps existing/default).
+    proactivity_resolved = False
 
     if interactive:
         print(f"┌  {C_BOLD}Brian setup{C_RESET}")
@@ -626,15 +738,18 @@ def run_init(
                         parsed_rules = list(preset["default_rules"])
                     rules_resolved = True
 
-            # Seed upkeep for optional customize step / summary.
-            upkeep_triggers_preview: list[str] = list(preset["triggers"])
-            upkeep_instructions_preview = str(preset["instructions"])
-            if existing_upkeep.get("triggers"):
-                raw_t = existing_upkeep["triggers"]
-                if isinstance(raw_t, list):
-                    upkeep_triggers_preview = [str(t) for t in raw_t]
-            if existing_upkeep.get("instructions"):
-                upkeep_instructions_preview = str(existing_upkeep["instructions"])
+            # Proactivity posture (always shown). On re-run, keep existing triggers/instructions
+            # unless posture changes or the user custom-edits upkeep below.
+            selected_proactivity = _select_proactivity_interactively(selected_proactivity)
+            proactivity_resolved = True
+            posture_changed = bool(existing_proactivity) and existing_proactivity != selected_proactivity
+            preserved = _existing_upkeep_pair(existing_upkeep)
+            if preserved is not None and not posture_changed:
+                upkeep_triggers_preview, upkeep_instructions_preview = preserved
+            else:
+                upkeep_triggers_preview, upkeep_instructions_preview = _upkeep_for_posture(
+                    selected_use_case, selected_proactivity
+                )
 
             want_upkeep = run_confirm(
                 "Customize what agents offer to save? (triggers & instructions)",
@@ -654,19 +769,11 @@ def run_init(
             company_rel_path = _clean_company_rel_path(company_file_slug, default_slug)
             enabled_rule_labels = [ALL_AGENT_RULES[r]["label"] for r in parsed_rules if r in ALL_AGENT_RULES]
             rules_summary = ", ".join(enabled_rule_labels) if enabled_rule_labels else "None (sensible defaults)"
+            posture_title = UPKEEP_POSTURES[selected_proactivity]["title"]
             upkeep_summary = (
-                f"custom ({len(upkeep_triggers_preview)} triggers)"
+                f"{posture_title} · custom ({len(upkeep_triggers_preview)} triggers)"
                 if custom_upkeep is not None
-                or (
-                    existing_upkeep.get("triggers")
-                    and list(existing_upkeep.get("triggers") or []) != list(preset["triggers"])
-                )
-                or (
-                    existing_upkeep.get("instructions")
-                    and str(existing_upkeep.get("instructions", "")).strip()
-                    != str(preset["instructions"]).strip()
-                )
-                else f"preset ({selected_use_case})"
+                else f"{posture_title} · {len(upkeep_triggers_preview)} triggers"
             )
 
             print("│")
@@ -732,20 +839,21 @@ def run_init(
         company_file_slug = Path(str(existing_paths["company_file"])).stem
     company_rel_path = _clean_company_rel_path(company_file_slug, default_slug)
 
-    # Prefer interactive customizations; else preserve hand-edited upkeep on re-run; else preset.
+    if not proactivity_resolved:
+        selected_proactivity = existing_proactivity or "selective"
+
+    # Prefer interactive customizations; else preserve hand-edited upkeep on re-run;
+    # else posture defaults (selective → use-case preset).
     if custom_upkeep is not None:
         upkeep_triggers, upkeep_instructions = custom_upkeep
     else:
-        upkeep_triggers = list(preset["triggers"])
-        upkeep_instructions = str(preset["instructions"])
-        if existing_upkeep.get("triggers"):
-            raw_t = existing_upkeep["triggers"]
-            if isinstance(raw_t, list):
-                upkeep_triggers = [str(t) for t in raw_t]
-            elif isinstance(raw_t, str) and raw_t.strip():
-                upkeep_triggers = [raw_t.strip()]
-        if existing_upkeep.get("instructions"):
-            upkeep_instructions = str(existing_upkeep["instructions"])
+        preserved = _existing_upkeep_pair(existing_upkeep)
+        if preserved is not None:
+            upkeep_triggers, upkeep_instructions = preserved
+        else:
+            upkeep_triggers, upkeep_instructions = _upkeep_for_posture(
+                selected_use_case, selected_proactivity
+            )
 
     # Escape quotes in trigger strings for TOML double-quoted items.
     def _toml_str(value: str) -> str:
@@ -756,7 +864,7 @@ def run_init(
 
     toml_content = f'''# wiki.toml — edit freely in plain English.
 # agent_rules  = optional behaviors (see README → Customize)
-# [upkeep]     = when agents should offer to update the wiki
+# [upkeep]     = proactivity + when agents should offer to update the wiki
 # Re-run `wiki init` anytime to change settings interactively
 # (overview page & hand-edited upkeep text are preserved).
 
@@ -775,6 +883,7 @@ company_file = "{company_rel_path}"
 registry_file = "internal/registry.md"
 
 [upkeep]
+proactivity = "{selected_proactivity}"
 triggers = {triggers_toml}
 instructions = """
 {str(upkeep_instructions).strip()}
@@ -793,7 +902,16 @@ instructions = """
         company_full_path.write_text(page_content, encoding="utf-8")
         overview_created = True
 
-    _update_pointer_templates(repo_root, str(org_name), str(org_short), selected_use_case, parsed_rules)
+    _update_pointer_templates(
+        repo_root,
+        str(org_name),
+        str(org_short),
+        selected_use_case,
+        parsed_rules,
+        upkeep_triggers=upkeep_triggers,
+        upkeep_instructions=upkeep_instructions,
+        upkeep_proactivity=selected_proactivity,
+    )
 
     wiki_dir = repo_root / "wiki"
     wiki_dir.mkdir(parents=True, exist_ok=True)
@@ -827,19 +945,28 @@ instructions = """
 
 
 def _update_pointer_templates(
-    repo_root: Path, org_name: str, org_short: str, use_case: str, agent_rules: list[str]
+    repo_root: Path,
+    org_name: str,
+    org_short: str,
+    use_case: str,
+    agent_rules: list[str],
+    *,
+    upkeep_triggers: list[str] | None = None,
+    upkeep_instructions: str = "",
+    upkeep_proactivity: str = "",
 ) -> None:
     """Updates _templates/agent-pointer.md and internal/skills/wiki-context/SKILL.md with active config."""
+    from .brief import format_rules_block, format_upkeep_block
+
     pointer_path = repo_root / "_templates" / "agent-pointer.md"
 
-    rules_lines = []
-    for r in agent_rules:
-        if r in ALL_AGENT_RULES:
-            rules_lines.append(ALL_AGENT_RULES[r]["prompt_rule"])
-
-    rules_block = ""
-    if rules_lines:
-        rules_block = "\nActive Agent Behavior Rules:\n" + "\n".join(rules_lines) + "\n"
+    rules_md = format_rules_block(agent_rules, ALL_AGENT_RULES)
+    upkeep_md = format_upkeep_block(upkeep_triggers, upkeep_instructions, upkeep_proactivity)
+    # Pointer sits inside agent instruction files — strip top-level ## headings.
+    rules_block = ("\n" + rules_md.replace("## Active agent rules\n", "Active agent rules:\n")) if rules_md else ""
+    upkeep_block = (
+        "\n" + upkeep_md.replace("## Keeping it current\n", "Keeping it current:\n")
+    ) if upkeep_md else ""
 
     pointer_content = f"""<!-- brian-wiki:start -->
 ## {org_name}
@@ -854,7 +981,7 @@ knowledge that no repository contains. The CLI is on your PATH.
 - Catalog: `wiki/index.md` inside `$(wiki root)`
 
 Cite pages as `[[Wikilink]]`, and never invent wiki facts — query first.
-{rules_block}
+{rules_block}{upkeep_block}
 For durable source-backed knowledge, prepare one JSON update payload and run
 `wiki knowledge update --input <payload.json>` to preview it without writes. Show the proposed changes to the
 user and wait for explicit approval. Then apply the unchanged payload with
@@ -862,11 +989,6 @@ user and wait for explicit approval. Then apply the unchanged payload with
 source accounting, retrieval cases, generated files, validation, and rollback; it never commits or pushes.
 The complete payload contract and source placeholder are documented in
 `$(wiki root)/internal/skills/wiki-context/SKILL.md`.
-
-When a functionality-changing PR goes up, or you author or substantially revise a project document
-(`.md`, `.html`, `.pdf`), say which knowledge-base page should be added or updated and why,
-then let the user decide. Never commit or push the wiki yourself. Refactors, dependency bumps, tests
-and formatting need nothing — "already current" is a valid answer.
 <!-- brian-wiki:end -->
 """
     pointer_path.parent.mkdir(parents=True, exist_ok=True)

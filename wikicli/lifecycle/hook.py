@@ -6,6 +6,7 @@ from pathlib import Path
 from ..core.config import WikiConfig
 from ..core.page import WikiDatabase, WikiPage
 from ..core.resolve import resolve_context
+from .brief import format_rules_block, format_upkeep_block
 from .personalization import load_agent_rule_catalog
 from .sync import SyncState, sync_wiki
 
@@ -157,23 +158,17 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
         f"/wiki-query; cite pages as [[Wikilink]].\n\n"
     )
 
-    upkeep_text = config.upkeep_instructions
-    if not upkeep_text and config.upkeep_triggers:
-        upkeep_text = "Triggers: " + "; ".join(config.upkeep_triggers)
-
-    upkeep = f"## Keeping it current\n{upkeep_text.strip()}\n\n" if upkeep_text else ""
+    upkeep = format_upkeep_block(
+        config.upkeep_triggers,
+        config.upkeep_instructions,
+        getattr(config, "upkeep_proactivity", ""),
+    )
 
     # Optional agent_rules from wiki.toml. No-op when empty or when init catalog
     # (lifecycle/init.py) is not present in this checkout.
     rules_block = ""
-    if getattr(config, "agent_rules", None):
-        all_agent_rules = load_agent_rule_catalog()
-        rule_lines = []
-        for r_key in config.agent_rules:
-            if r_key in all_agent_rules:
-                rule_lines.append(all_agent_rules[r_key]["prompt_rule"])
-        if rule_lines:
-            rules_block = "## Active agent rules\n" + "\n".join(rule_lines) + "\n\n"
+    if config.agent_rules:
+        rules_block = format_rules_block(config.agent_rules, load_agent_rule_catalog())
 
     freshness = ""
     if sync_result.fresh is not True:

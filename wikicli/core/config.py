@@ -27,6 +27,7 @@ class WikiConfig:
 
         self.upkeep_triggers: list[str] = []
         self.upkeep_instructions: str = ""
+        self.upkeep_proactivity: str = ""
 
         # Optional personalization (wiki.toml). Defaults empty — never force
         # people_tracking or other PII-oriented behaviors.
@@ -76,3 +77,9 @@ class WikiConfig:
         upkeep_sec = data.get("upkeep", {})
         self.upkeep_triggers = upkeep_sec.get("triggers", [])
         self.upkeep_instructions = upkeep_sec.get("instructions", "")
+        raw_proactivity = str(upkeep_sec.get("proactivity", "")).strip().lower()
+        self.upkeep_proactivity = (
+            raw_proactivity
+            if raw_proactivity in {"selective", "active", "capture", "silent"}
+            else ""
+        )

@@ -315,19 +315,21 @@ agent_rules = []
 # agent_rules = ["people_tracking", "asset_tracking", "security_notice"]
 ```
 
-| Rule ID | Plain English |
-|---|---|
-| `people_tracking` | Keep pages for teammates, roles, and who owns what |
-| `asset_tracking` | Laptops, asset tags, licenses, access request SOPs |
-| `security_notice` | Never write passwords/API keys into wiki pages |
-| `adrs` | Record architecture decisions (context → decision → consequences) |
-| `strict_sources` | Every new claim should cite a file under `raw/` |
-| `quick_capture` | Turn messy notes into linked topic pages quickly |
+| Rule ID | Plain English | Extra |
+|---|---|---|
+| `people_tracking` | Keep pages for teammates, roles, and who owns what | Soft person-page shape guidance |
+| `asset_tracking` | Laptops, asset tags, licenses, access request SOPs | Soft asset-page shape guidance |
+| `security_notice` | Never write passwords/API keys into wiki pages | — |
+| `adrs` | Record architecture decisions (context → decision → consequences) | Soft ADR shape guidance |
+| `strict_sources` | Every new claim should cite a file under `raw/` | — |
+| `quick_capture` | Turn messy notes into linked topic pages quickly | — |
+
+Enabled rules ship as session-start bullets; some also add short **page-shape guidance** (still soft — ingest validation stays fixed).
 
 After editing:
 
 1. Save `wiki.toml`
-2. Either re-run `wiki init -y` (refreshes agent pointer text) **or** just start a new agent session — the SessionStart hook reads `agent_rules` live
+2. Either re-run `wiki init -y` (refreshes agent pointer text) **or** just start a new agent session — the SessionStart hook reads `agent_rules` + `[upkeep]` live
 3. Or re-run `wiki init` interactively and multi-select behaviors again (current rules are pre-checked)
 
 ```bash
@@ -337,10 +339,22 @@ wiki init --rules people_tracking,security_notice -y
 
 ### What’s worth saving (`[upkeep]`)
 
-Tells agents **when** to offer a wiki update and **how** to phrase it. Presets ship per use case; customize in init (“Customize what agents offer to save?”) or edit here:
+Controls **how proactive** agents are, **when** they offer a wiki update, and **how** they phrase it.
+
+During `wiki init` you pick a proactivity posture (always shown):
+
+| `proactivity` | Meaning |
+|---|---|
+| `selective` | Durable, high-signal changes only (default; use-case trigger preset) |
+| `active` | Offer updates often; still ask first |
+| `capture` | Prefer logging — treat most durable context as worth saving |
+| `silent` | Only update when the user asks |
+
+Session start always injects **both** triggers and instructions (plus the proactivity label). Agents still ask before writing and never auto-commit.
 
 ```toml
 [upkeep]
+proactivity = "selective"  # or active | capture | silent
 triggers = [
     "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
     "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report",
@@ -357,7 +371,9 @@ Examples of good triggers (plain English):
 - Updating a customer-facing policy or pricing doc
 - Closing a decision in a design review
 
-Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you opt into editing it again.
+Want “log everything durable”? set `proactivity = "capture"` (or pick it in init). Want quiet agents? use `silent`.
+
+Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you change posture or opt into editing triggers/instructions again.
 
 ### Other knobs
 

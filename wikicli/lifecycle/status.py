@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from ..core.config import WikiConfig
+from .brief import PROACTIVITY_LABELS
 from .integrations import AGENT_REGISTRY, SUPPORTED_AGENTS, integration_state
+from .personalization import load_agent_rule_catalog
 from .sync import get_sync_status
 
 C_RESET = "\033[0m"
@@ -26,6 +29,30 @@ AGENT_STATUS = {
 }
 
 
+def _agent_behavior_lines(repo_root: Path) -> list[str]:
+    """Short 'what agents will do' card from wiki.toml."""
+    cfg = WikiConfig(repo_root)
+    key = (cfg.upkeep_proactivity or "selective").strip().lower()
+    proactivity = PROACTIVITY_LABELS.get(key, PROACTIVITY_LABELS["selective"])
+    n_triggers = len([t for t in cfg.upkeep_triggers if str(t).strip()])
+    labels: list[str] = []
+    if cfg.agent_rules:
+        catalog = load_agent_rule_catalog()
+        for rid in cfg.agent_rules:
+            meta = catalog.get(rid) if isinstance(catalog, dict) else None
+            if isinstance(meta, dict) and isinstance(meta.get("label"), str):
+                labels.append(meta["label"])
+            else:
+                labels.append(rid)
+    rules = ", ".join(labels) if labels else "none (defaults)"
+    return [
+        "What agents will do",
+        f"  proactivity: {proactivity}",
+        f"  rules: {rules}",
+        f"  triggers: {n_triggers} (session start ships triggers + instructions)",
+    ]
+
+
 def run_status(repo_root: Path) -> None:
     """Report the shared CLI separately and count only active agent integrations."""
     home = Path.home()
@@ -44,6 +71,9 @@ def run_status(repo_root: Path) -> None:
     marker = S_CHECK_GREEN if sync.fresh is True else S_TRIANGLE_ORANGE
     print("│  Knowledge Freshness")
     print(f"│    {marker} {sync.detail}{age}")
+    print("│")
+    for line in _agent_behavior_lines(repo_root):
+        print(f"│  {line}" if not line.startswith("  ") else f"│{line}")
     print("│")
     print("│  CLI Binary on PATH")
     if local_bin.is_symlink() and local_bin.resolve() == source_wiki.resolve():

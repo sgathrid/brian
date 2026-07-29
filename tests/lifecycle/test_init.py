@@ -265,6 +265,18 @@ def test_customize_upkeep_interactively_edits_both(monkeypatch):
     assert out_i == "Offer updates only when asked."
 
 
+def _fake_init_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+    """Interactive init uses single-select for use-case and proactivity."""
+    if single_select:
+        ids = [o[0] for o in (options or [])]
+        if "selective" in ids:
+            return "selective"
+        if "company" in ids:
+            return "company"
+        return ids[0] if ids else ""
+    return "adrs strict_sources"
+
+
 def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatch):
     """Interactive path: multi-select rules + custom upkeep write through to wiki.toml."""
     from wikicli.lifecycle import init as init_mod
@@ -272,16 +284,10 @@ def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatc
     (tmp_path / "wiki").mkdir()
 
     # Sequence of run_confirm: customize rules? Y, customize upkeep? Y, keep triggers? N,
-    # edit instructions? Y, save? Y
+    # edit instructions? Y, save? Y  (proactivity is a menu, not confirm)
     confirm_answers = iter([True, True, False, True, True])
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
-
-    def fake_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
-        if single_select:
-            return "company"
-        return "adrs strict_sources"
-
-    monkeypatch.setattr(init_mod, "run_menu", fake_menu)
+    monkeypatch.setattr(init_mod, "run_menu", _fake_init_menu)
     monkeypatch.setattr(init_mod, "_prompt", lambda text, default: "Interactive Co")
     monkeypatch.setattr(
         init_mod,
@@ -304,12 +310,17 @@ def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatc
     assert data["wiki"]["name"] == "Interactive Co"
     assert data["wiki"]["use_case"] == "company"
     assert data["wiki"]["agent_rules"] == ["adrs", "strict_sources"]
+    assert data["upkeep"]["proactivity"] == "selective"
     assert data["upkeep"]["triggers"] == ["Ship a user-facing change", "Update a policy doc"]
     assert "Ask before writing" in data["upkeep"]["instructions"]
 
     toml_text = (tmp_path / "wiki.toml").read_text(encoding="utf-8")
     assert "edit freely in plain English" in toml_text
     assert "[upkeep]" in toml_text
+
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert "Ship a user-facing change" in pointer
+    assert "Ask before writing" in pointer
 
 
 def test_run_init_interactive_rerun_preserves_upkeep_when_skipped(tmp_path: Path, monkeypatch):
@@ -334,16 +345,31 @@ def test_run_init_interactive_rerun_preserves_upkeep_when_skipped(tmp_path: Path
     # customize rules? N, customize upkeep? N, save? Y
     confirm_answers = iter([False, False, True])
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
-    monkeypatch.setattr(
-        init_mod,
-        "run_menu",
-        lambda prompt, options=None, title="Brian setup", non_interactive=False, single_select=False: "company",
-    )
+    monkeypatch.setattr(init_mod, "run_menu", _fake_init_menu)
     monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
     monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
 
     assert run_init(tmp_path, non_interactive=False) is True
     assert "KEEP_ME_ON_RERUN" in toml_path.read_text(encoding="utf-8")
+
+
+def test_run_init_writes_proactivity_and_pointer_upkeep(tmp_path: Path):
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Posture Co",
+        short_name="PC",
+        company_file_slug="posture-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        data = tomllib.load(f)
+    assert data["upkeep"]["proactivity"] == "selective"
+    assert data["upkeep"]["triggers"]
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert "Keeping it current" in pointer
+    assert str(data["upkeep"]["triggers"][0]) in pointer
+    assert "Proactivity:" in pointer or "selective" in pointer
 
 
 def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
@@ -371,3 +397,8 @@ def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
     assert "Active agent rules" in ctx
     assert "People & Team Directory" in ctx
     assert "Security & Secrets Policy" in ctx
+    assert "Person page shape" in ctx
+    assert "## Keeping it current" in ctx
+    assert cfg.upkeep_triggers
+    assert cfg.upkeep_triggers[0] in ctx
+    assert "never commit" in ctx.lower() or "Never commit" in ctx

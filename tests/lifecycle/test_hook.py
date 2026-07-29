@@ -114,6 +114,46 @@ class TestContent:
         text = payload()
         assert "## Active agent rules" not in text
 
+    def test_upkeep_includes_triggers_and_instructions_together(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Custom triggers must not disappear when instructions are also set."""
+        import json
+
+        from wikicli.lifecycle.hook import run_session_start_hook
+
+        monkeypatch.setattr(
+            "wikicli.lifecycle.hook.sync_wiki",
+            lambda _repo_root: SyncResult(SyncState.CURRENT, "ok", True, 1000),
+        )
+        (tmp_path / "wiki").mkdir()
+        (tmp_path / "wiki" / "index.md").write_text("# Index\n", encoding="utf-8")
+        (tmp_path / "wiki.toml").write_text(
+            """
+[wiki]
+name = "Hook Co"
+description = "Company knowledge base for tests"
+agent_rules = ["people_tracking"]
+
+[upkeep]
+proactivity = "active"
+triggers = [
+    "UNIQUE_TRIGGER_ALPHA_SHIP_FEATURE",
+    "UNIQUE_TRIGGER_BETA_POLICY_DOC",
+]
+instructions = \"\"\"
+UNIQUE_INSTR_ASK_BEFORE_WRITE. Never commit or push.
+\"\"\"
+""",
+            encoding="utf-8",
+        )
+        raw = run_session_start_hook(tmp_path, "")
+        text = json.loads(raw)["hookSpecificOutput"]["additionalContext"]
+        assert "## Keeping it current" in text
+        assert "UNIQUE_TRIGGER_ALPHA_SHIP_FEATURE" in text
+        assert "UNIQUE_TRIGGER_BETA_POLICY_DOC" in text
+        assert "UNIQUE_INSTR_ASK_BEFORE_WRITE" in text
+        assert "Proactivity:" in text
+        assert "Person page shape" in text
+
 
 class TestBudget:
     def test_payload_stays_within_a_sane_size_budget(self):
