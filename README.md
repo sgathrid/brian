@@ -104,12 +104,15 @@ Then continue with `uv sync` above.
 wiki init
 ```
 
-An interactive setup guides you through your **use case** (Company, IT helpdesk, Engineering, Research, or Personal), **organization name**, and optional extras:
+An interactive setup guides you through:
 
-- **Agent behavior** — multi-select with ↑↓ / space (people tracking, assets, ADRs, …)
-- **What agents offer to save** — plain-English triggers & instructions (`[upkeep]`)
+1. **Use case** — Company, IT helpdesk, Engineering, Research, or Personal  
+2. **Organization name**  
+3. **Agent behavior** (optional) — multi-select with ↑↓ / **space** (people tracking, assets, ADRs, …)  
+4. **Proactivity** (always shown) — how eager agents are about wiki updates (`selective` / `active` / `capture` / `silent`)  
+5. **Fine-tune triggers & instructions** — offered for `selective`, or when re-running the same posture so you can edit plain-English `[upkeep]` text  
 
-Defaults are fine for most teams; advanced steps are opt-in. Re-run `wiki init` anytime — current values are pre-selected, and your overview page + hand-edited upkeep text are preserved.
+Defaults are fine for most teams. Re-run `wiki init` anytime — current values are pre-selected; overview pages and hand-edited upkeep text are preserved unless you change posture or opt into editing again.
 
 *(For automated or non-interactive setups, see [Customize](#customize) below.)*
 
@@ -371,9 +374,11 @@ Examples of good triggers (plain English):
 - Updating a customer-facing policy or pricing doc
 - Closing a decision in a design review
 
-Want “log everything durable”? set `proactivity = "capture"` (or pick it in init). Want quiet agents? use `silent`.
+Want “log everything durable”? set `proactivity = "capture"` (or pick it in init). Want quiet agents? use `silent` — and clear or rewrite `triggers` if you want agents to stay quiet about offers too (`silent` is a label; triggers still inject unless empty).
 
-Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you change posture or opt into editing triggers/instructions again.
+**Fine-tune gating:** first-run `active` / `capture` / `silent` apply that posture’s pack and skip the text editor. To customize wording without switching posture, re-run `wiki init`, keep the same proactivity, and accept the edit prompt — or hand-edit `wiki.toml`.
+
+Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you change posture (which loads that posture’s pack) or opt into editing triggers/instructions again.
 
 ### Other knobs
 
@@ -381,7 +386,7 @@ Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you c
 - **Connected tools** → `wiki install` / `wiki uninstall`
 - **How agents talk about the wiki** → `_templates/agent-pointer.md` + `internal/skills/wiki-context/`
 
-**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh.
+**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh. Changing **use case** refreshes default agent rules for that preset; selective trigger text is kept if you already customized it (or if proactivity stayed selective without an edit pass).
 
 Everything important is text. Fork it and make it yours.
 

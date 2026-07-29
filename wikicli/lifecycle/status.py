@@ -30,27 +30,43 @@ AGENT_STATUS = {
 
 
 def _agent_behavior_lines(repo_root: Path) -> list[str]:
-    """Short 'what agents will do' card from wiki.toml."""
+    """Short 'what agents will do' card from wiki.toml.
+
+    Mirrors session-start honesty: only catalog-resolved rules count as active,
+    and proactivity is shown as a brief label (not a silent rewrite of triggers).
+    """
     cfg = WikiConfig(repo_root)
-    key = (cfg.upkeep_proactivity or "selective").strip().lower()
-    if key not in PROACTIVITY_LABELS:
-        key = "selective"
+    key = (cfg.upkeep_proactivity or "").strip().lower()
+    if key in PROACTIVITY_LABELS:
+        proactivity_display = PROACTIVITY_LABELS[key]
+    elif key:
+        proactivity_display = f"{key} (unknown — ignored at session start)"
+    else:
+        proactivity_display = "(unset)"
+
     n_triggers = len([t for t in cfg.upkeep_triggers if str(t).strip()])
-    labels: list[str] = []
-    if cfg.agent_rules:
+
+    if not cfg.agent_rules:
+        rules = "none"
+    else:
         catalog = load_agent_rule_catalog()
-        for rid in cfg.agent_rules:
-            meta = catalog.get(rid) if isinstance(catalog, dict) else None
-            if isinstance(meta, dict) and isinstance(meta.get("label"), str):
-                labels.append(meta["label"])
-            else:
-                labels.append(rid)
-    rules = ", ".join(labels) if labels else "none"
+        if not catalog:
+            # Same gate as format_rules_block: empty catalog ⇒ nothing injected.
+            rules = "unavailable (no catalog)"
+        else:
+            labels: list[str] = []
+            for rid in cfg.agent_rules:
+                meta = catalog.get(rid) if isinstance(catalog, dict) else None
+                if isinstance(meta, dict) and isinstance(meta.get("label"), str) and meta["label"].strip():
+                    labels.append(meta["label"].strip())
+            rules = ", ".join(labels) if labels else "none"
+
     return [
         "What agents will do",
-        f"  proactivity: {key}",
-        f"  rules: {rules}",
-        f"  triggers: {n_triggers}",
+        f"    proactivity: {proactivity_display}",
+        f"    {C_DIM}label only — session behavior = triggers + instructions{C_RESET}",
+        f"    rules: {rules}",
+        f"    triggers: {n_triggers}",
     ]
 
 

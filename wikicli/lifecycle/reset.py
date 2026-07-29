@@ -78,7 +78,13 @@ def run_reset(
             else:
                 prompt = f"Confirm {mode} reset?"
 
-            confirmed = run_confirm(prompt, default=False, title="Brian Wiki Reset")
+            confirmed = run_confirm(
+                prompt,
+                default=False,
+                title="Brian Wiki Reset",
+                confirm_label="delete matching files",
+                cancel_label="keep files",
+            )
             if not confirmed:
                 print("wiki reset: cancelled by user.", file=sys.stderr)
                 return

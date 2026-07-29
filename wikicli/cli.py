@@ -174,7 +174,8 @@ def main():
     p_hook = subparsers.add_parser("hook", help="Execute agent hooks")
     p_hook.add_argument("event", choices=["session-start"], help="Hook event type")
 
-    # wiki init (optional — only when lifecycle/init.py is present)
+    # wiki init — full setup when lifecycle/init.py is present; stub otherwise
+    # so operators never hit a bare argparse "invalid choice" dead-end.
     if _HAS_INIT:
         p_init = subparsers.add_parser(
             "init",
@@ -211,6 +212,16 @@ def main():
             "--yes",
             action="store_true",
             help="Non-interactive: accept flags/defaults, no prompts",
+        )
+    else:
+        subparsers.add_parser(
+            "init",
+            help="Not available in this checkout — edit wiki.toml instead",
+            description=(
+                "Interactive init is not shipped in this checkout. "
+                "Edit wiki.toml ([wiki], [upkeep]) directly, then start a new agent session "
+                "or run wiki status to verify. See README → Customize agent upkeep."
+            ),
         )
 
     # wiki install [targets...]
@@ -364,6 +375,14 @@ def main():
     elif args.subcommand == "init":
         if not _HAS_INIT or run_init is None:
             print("wiki init is not available in this checkout.", file=sys.stderr)
+            print(
+                "Edit wiki.toml instead:\n"
+                "  [wiki]   name, short_name, description, agent_rules\n"
+                "  [upkeep] proactivity (label), triggers, instructions\n"
+                "Then run `wiki status` or start a new agent session.\n"
+                "See README → Customize agent upkeep.",
+                file=sys.stderr,
+            )
             sys.exit(2)
         if not run_init(
             repo_root,

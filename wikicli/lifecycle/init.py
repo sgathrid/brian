@@ -636,8 +636,10 @@ def run_init(
       1. Use case (always shown; current value pre-selected on re-run)
       2. Org name
       3. Optional agent-behavior multi-select (space toggles)
-      4. Optional upkeep triggers/instructions (plain English)
-    Re-runs preserve custom upkeep text and existing overview pages.
+      4. Proactivity posture (always shown: selective/active/capture/silent)
+      5. Fine-tune triggers/instructions when selective, or same-posture re-run
+    Re-runs preserve custom upkeep text and existing overview pages unless the
+    posture changes (pack swap) or the user opts into editing again.
     """
     repo_root = repo_root.resolve()
     toml_path = repo_root / "wiki.toml"
