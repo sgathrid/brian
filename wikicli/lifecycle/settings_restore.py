@@ -35,9 +35,22 @@ S_CHECK_GREEN = f"{C_GREEN}✓{C_RESET}"
 
 RESTORE_TARGETS = ("upkeep", "identity", "all")
 
+TARGET_LABELS = {
+    "upkeep": "Upkeep text",
+    "identity": "Org identity",
+    "all": "All settings",
+}
+
 
 def _repo_base_name(repo_root: Path) -> str:
     return repo_root.name.replace("-", " ").replace("_", " ").title() or "Organization"
+
+
+def _clip(text: str, width: int = 48) -> str:
+    text = " ".join(str(text).split())
+    if len(text) <= width:
+        return text
+    return text[: width - 1] + "…"
 
 
 def _current_snapshot(existing: dict, repo_root: Path) -> dict[str, object]:
@@ -95,7 +108,11 @@ def _planned_snapshot(
 
     preset = USE_CASE_PRESETS[use_case]
     base = _repo_base_name(repo_root)
-    proactivity = str(current["proactivity"]) if str(current["proactivity"]) in ("selective", "active", "capture", "silent") else "selective"
+    proactivity = (
+        str(current["proactivity"])
+        if str(current["proactivity"]) in ("selective", "active", "capture", "silent")
+        else "selective"
+    )
 
     if target in ("identity", "all"):
         name = f"{base} {preset['default_name_suffix']}"
@@ -114,7 +131,6 @@ def _planned_snapshot(
     if target == "all":
         planned["agent_rules"] = list(preset["default_rules"])
 
-    # Keep company_file path stable unless missing.
     planned["company_rel_path"] = _clean_company_rel_path(
         str(current.get("company_rel_path") or ""),
         _slugify(str(planned["name"]).replace("Knowledge Base", "").replace("Wiki", "")) + "-overview",
@@ -122,39 +138,67 @@ def _planned_snapshot(
     return planned
 
 
-def _preview_lines(before: dict[str, object], after: dict[str, object]) -> list[str]:
-    lines: list[str] = []
-    keys = (
-        ("use_case", "use_case"),
-        ("name", "name"),
-        ("short_name", "short_name"),
-        ("description", "description"),
-        ("agent_rules", "agent_rules"),
-        ("proactivity", "proactivity"),
-        ("triggers", "triggers"),
-        ("instructions", "instructions"),
-    )
-    for key, label in keys:
+def _preview_rows(before: dict[str, object], after: dict[str, object]) -> list[tuple[str, str]]:
+    """Return (label, change summary) rows for fields that differ."""
+    rows: list[tuple[str, str]] = []
+
+    def add_scalar(key: str, label: str) -> None:
         b, a = before.get(key), after.get(key)
         if b == a:
-            continue
-        if key == "triggers":
-            lines.append(f"  triggers: {len(b or [])} item(s) → {len(a or [])} stock item(s)")
-        elif key == "instructions":
-            b_s = str(b or "").strip().replace("\n", " ")
-            a_s = str(a or "").strip().replace("\n", " ")
-            if len(b_s) > 60:
-                b_s = b_s[:57] + "…"
-            if len(a_s) > 60:
-                a_s = a_s[:57] + "…"
-            lines.append(f"  instructions: {b_s!r} → {a_s!r}")
-        elif key == "agent_rules":
-            lines.append(f"  agent_rules: {b or []} → {a or []}")
-        else:
-            lines.append(f"  {label}: {b!r} → {a!r}")
-    if not lines:
-        lines.append("  (no changes — already at target defaults)")
-    return lines
+            return
+        rows.append((label, f"{_clip(str(b), 36)}  →  {_clip(str(a), 36)}"))
+
+    add_scalar("use_case", "use_case")
+    add_scalar("name", "name")
+    add_scalar("short_name", "short_name")
+
+    if before.get("description") != after.get("description"):
+        rows.append(("description", "rewritten to use-case default"))
+
+    b_rules = list(before.get("agent_rules") or [])  # type: ignore[arg-type]
+    a_rules = list(after.get("agent_rules") or [])  # type: ignore[arg-type]
+    if b_rules != a_rules:
+        rows.append(("agent_rules", f"{len(b_rules)} selected  →  {len(a_rules)} defaults"))
+
+    add_scalar("proactivity", "proactivity")
+
+    b_t = list(before.get("triggers") or [])  # type: ignore[arg-type]
+    a_t = list(after.get("triggers") or [])  # type: ignore[arg-type]
+    if b_t != a_t:
+        rows.append(("triggers", f"{len(b_t)} custom  →  {len(a_t)} stock"))
+
+    if str(before.get("instructions") or "").strip() != str(after.get("instructions") or "").strip():
+        rows.append(("instructions", "restored to stock pack"))
+
+    return rows
+
+
+def _print_preview(
+    target: str,
+    rows: list[tuple[str, str]],
+    *,
+    dry_run: bool,
+    stock_use_case: bool,
+) -> None:
+    label = TARGET_LABELS.get(target, target)
+    suffix = " · dry run" if dry_run else ""
+    print(f"┌  {C_BOLD}wiki reset · user settings{suffix}{C_RESET}")
+    print("│")
+    print(f"│  {C_BOLD}Target{C_RESET}  {C_CYAN}{label}{C_RESET}  {C_DIM}→ wiki.toml only{C_RESET}")
+    if stock_use_case and target == "all":
+        print(f"│  {C_YELLOW}Also sets use_case = company{C_RESET}")
+    print("│")
+    if not rows:
+        print(f"│  {C_DIM}Already at stock defaults for this target.{C_RESET}")
+    else:
+        print(f"│  {C_BOLD}Will change{C_RESET}")
+        width = max(len(name) for name, _ in rows)
+        for name, summary in rows:
+            print(f"│    {C_DIM}{name.ljust(width)}{C_RESET}  {summary}")
+    print("│")
+    print(f"│  {C_DIM}Keeps wiki pages, raw/, and overview body.{C_RESET}")
+    print("└")
+    print()
 
 
 def run_settings_restore(
@@ -171,31 +215,32 @@ def run_settings_restore(
 
     if not target and not non_interactive and is_tty():
         sel = run_menu(
-            "Restore which settings? (does not delete wiki pages)",
+            "Which user settings?",
             options=[
                 (
                     "upkeep",
                     "Upkeep text",
-                    "stock triggers + instructions for current proactivity/use case",
+                    "stock triggers + instructions (current posture)",
                     True,
                 ),
                 (
                     "identity",
                     "Org identity",
-                    "name, short_name, description from repo + use case",
+                    "name, short_name, description",
                     False,
                 ),
                 (
                     "all",
                     "All settings",
-                    "identity + selective upkeep pack + default agent_rules",
+                    "identity + selective pack + default rules",
                     False,
                 ),
             ],
-            title="Brian Wiki Reset",
+            title="wiki reset · user settings",
             single_select=True,
         )
         target = sel.strip().lower()
+        print()  # separate menu chrome (tty) from the preview (stdout)
 
     if target not in RESTORE_TARGETS:
         print("wiki reset settings: choose a target.", file=sys.stderr)
@@ -214,38 +259,30 @@ def run_settings_restore(
     existing = _load_existing_manifest(toml_path)
     before = _current_snapshot(existing, repo_root)
     after = _planned_snapshot(before, target, repo_root, stock_use_case=stock_use_case)
-    preview = _preview_lines(before, after)
+    rows = _preview_rows(before, after)
 
-    print(f"┌  {C_BOLD}Brian reset · user settings{' (DRY RUN)' if dry_run else ''}{C_RESET}")
-    print("│")
-    print(f"│  target: {C_CYAN}{target}{C_RESET}")
-    print(f"│  file:   {C_CYAN}wiki.toml{C_RESET}  {C_DIM}(natural-language [upkeep] is the source of truth){C_RESET}")
-    if stock_use_case and target == "all":
-        print(f"│  {C_YELLOW}also forcing use_case = company{C_RESET}")
-    print("│")
-    print(f"│  {C_BOLD}Planned changes:{C_RESET}")
-    for line in preview:
-        print(f"│{line}")
-    print("│")
-    print(f"│  {C_DIM}Does not delete wiki pages or raw/. Overview page body is kept.{C_RESET}")
-    print("│")
+    _print_preview(target, rows, dry_run=dry_run, stock_use_case=stock_use_case)
 
-    unchanged = preview == ["  (no changes — already at target defaults)"]
-    if unchanged:
-        print(f"└  {C_BOLD}Done.{C_RESET} Nothing to restore.")
+    if not rows:
+        print(f"{S_CHECK_GREEN} Nothing to restore.")
         return True
 
-    if not dry_run and not confirmed:
+    if dry_run:
+        print(f"{C_DIM}Dry run only — wiki.toml not modified.{C_RESET}")
+        print(f"Apply:  {C_CYAN}wiki reset settings {target} -y{C_RESET}")
+        return True
+
+    if not confirmed:
         if not non_interactive and is_tty():
             confirmed = run_confirm(
-                f"Restore {target} settings to defaults?",
+                "Write these stock defaults to wiki.toml?",
                 default=False,
-                title="Brian Wiki Reset",
-                confirm_label=f"restore {target}",
-                cancel_label="keep current",
+                title="wiki reset · user settings",
+                confirm_label="write stock defaults",
+                cancel_label="keep my settings",
             )
             if not confirmed:
-                print("wiki reset settings: cancelled.", file=sys.stderr)
+                print("Cancelled — nothing changed.")
                 return False
         if not confirmed:
             print(
@@ -255,10 +292,6 @@ def run_settings_restore(
                 file=sys.stderr,
             )
             raise SystemExit(2)
-
-    if dry_run:
-        print(f"└  {C_BOLD}Dry run only — wiki.toml not modified.{C_RESET}")
-        return True
 
     write_wiki_toml(
         toml_path,
@@ -292,12 +325,12 @@ def run_settings_restore(
         generate_tags(db, wiki_dir)
         generate_registry(repo_root)
 
-    print(f"│  {S_CHECK_GREEN} Wrote {C_CYAN}wiki.toml{C_RESET}")
-    print(f"│  {S_CHECK_GREEN} Updated {C_CYAN}_templates/agent-pointer.md{C_RESET}")
-    print("│")
-    print(f"└  {C_BOLD}Done.{C_RESET} Restored {target} defaults.")
+    label = TARGET_LABELS.get(target, target)
     print()
-    print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  ([upkeep] triggers & instructions)")
-    print(f"   Verify:        {C_CYAN}wiki status{C_RESET}  · start a new agent session")
-    print(f"   Pages only:    {C_CYAN}wiki reset full|scope|orphans{C_RESET}")
+    print(f"{S_CHECK_GREEN} Restored {C_BOLD}{label}{C_RESET} → {C_CYAN}wiki.toml{C_RESET}")
+    print(f"   {C_DIM}pointer updated · pages untouched{C_RESET}")
+    print()
+    print(f"   Edit anytime   {C_CYAN}wiki.toml{C_RESET}  [upkeep]")
+    print(f"   Check          {C_CYAN}wiki status{C_RESET}")
+    print(f"   Pages only     {C_CYAN}wiki reset full|scope|orphans{C_RESET}")
     return True
