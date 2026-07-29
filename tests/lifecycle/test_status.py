@@ -25,7 +25,7 @@ instructions = \"\"\"Ask first.\"\"\"
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "wikicli.lifecycle.status.load_agent_rule_catalog", lambda: {}
+        "wikicli.lifecycle.status.load_agent_rule_catalog", dict
     )
     lines = _agent_behavior_lines(tmp_path)
     joined = "\n".join(lines)
