@@ -354,6 +354,57 @@ def _format_rules_toml(rules: list[str]) -> str:
     return "[\n" + ",\n".join(f'    "{r}"' for r in rules) + "\n]"
 
 
+def _toml_escape(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def write_wiki_toml(
+    toml_path: Path,
+    *,
+    org_name: str,
+    org_short: str,
+    org_desc: str,
+    use_case: str,
+    agent_rules: list[str],
+    company_rel_path: str,
+    proactivity: str,
+    triggers: list[str],
+    instructions: str,
+) -> None:
+    """Write wiki.toml — natural-language [upkeep] is the durable settings surface."""
+    triggers_toml = "[\n" + ",\n".join(f'    "{_toml_escape(str(t))}"' for t in triggers) + "\n]"
+    rules_toml = _format_rules_toml(agent_rules)
+    toml_content = f'''# wiki.toml — edit freely in plain English.
+# agent_rules  = optional behaviors (see README → Customize)
+# [upkeep]     = proactivity + when agents should offer to update the wiki
+# Re-run `wiki init` anytime to change settings interactively
+# (overview page & hand-edited upkeep text are preserved).
+# Restore stock packs/names: `wiki settings restore …` (does not delete pages).
+
+[wiki]
+name = "{_toml_escape(str(org_name))}"
+short_name = "{_toml_escape(str(org_short))}"
+description = "{_toml_escape(str(org_desc))}"
+version = "0.1.0"
+use_case = "{use_case}"
+agent_rules = {rules_toml}
+
+[paths]
+data_dir = "wiki"
+raw_dir = "raw"
+company_file = "{company_rel_path}"
+registry_file = "internal/registry.md"
+
+[upkeep]
+proactivity = "{proactivity}"
+triggers = {triggers_toml}
+instructions = """
+{str(instructions).strip()}
+"""
+'''
+    toml_path.write_text(toml_content, encoding="utf-8")
+
+
 def _load_existing_manifest(toml_path: Path) -> dict:
     """Best-effort read of an existing wiki.toml for re-run defaults."""
     if not toml_path.is_file():
@@ -919,41 +970,18 @@ def run_init(
         prior_use_case=existing_use_case,
     )
 
-    # Escape quotes in trigger strings for TOML double-quoted items.
-    def _toml_str(value: str) -> str:
-        return value.replace("\\", "\\\\").replace('"', '\\"')
-
-    triggers_toml = "[\n" + ",\n".join(f'    "{_toml_str(str(t))}"' for t in upkeep_triggers) + "\n]"
-    rules_toml = _format_rules_toml(parsed_rules)
-
-    toml_content = f'''# wiki.toml — edit freely in plain English.
-# agent_rules  = optional behaviors (see README → Customize)
-# [upkeep]     = proactivity + when agents should offer to update the wiki
-# Re-run `wiki init` anytime to change settings interactively
-# (overview page & hand-edited upkeep text are preserved).
-
-[wiki]
-name = "{_toml_str(str(org_name))}"
-short_name = "{_toml_str(str(org_short))}"
-description = "{_toml_str(str(org_desc))}"
-version = "0.1.0"
-use_case = "{selected_use_case}"
-agent_rules = {rules_toml}
-
-[paths]
-data_dir = "wiki"
-raw_dir = "raw"
-company_file = "{company_rel_path}"
-registry_file = "internal/registry.md"
-
-[upkeep]
-proactivity = "{selected_proactivity}"
-triggers = {triggers_toml}
-instructions = """
-{str(upkeep_instructions).strip()}
-"""
-'''
-    toml_path.write_text(toml_content, encoding="utf-8")
+    write_wiki_toml(
+        toml_path,
+        org_name=str(org_name),
+        org_short=str(org_short),
+        org_desc=str(org_desc),
+        use_case=selected_use_case,
+        agent_rules=parsed_rules,
+        company_rel_path=company_rel_path,
+        proactivity=selected_proactivity,
+        triggers=upkeep_triggers,
+        instructions=upkeep_instructions,
+    )
 
     # Overview: create only if missing so re-runs never clobber hand edits.
     company_full_path = repo_root / company_rel_path
@@ -1002,6 +1030,7 @@ instructions = """
     print()
     print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  (agent_rules, name, [upkeep])")
     print(f"   Or re-run:     {C_CYAN}wiki init{C_RESET}  (current values pre-selected)")
+    print(f"   Stock restore: {C_CYAN}wiki settings restore upkeep|identity|all{C_RESET}")
     print(f"   How to customize: README → {C_BOLD}Customize in plain English{C_RESET}")
     print()
     print(f"   {C_BOLD}Next:{C_RESET} {C_CYAN}wiki install{C_RESET}  → connect Claude, Cursor, Codex, Gemini, …")

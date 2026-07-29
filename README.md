@@ -380,11 +380,30 @@ Want “log everything durable”? set `proactivity = "capture"` (or pick it in 
 
 Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you change posture (which loads that posture’s pack) or opt into editing triggers/instructions again.
 
+### Restore stock settings (not page delete)
+
+`wiki reset` only deletes **pages**. To put personalization back to stock packs/names:
+
+| Command | Restores | Keeps |
+|---|---|---|
+| `wiki settings restore upkeep` | Stock triggers + instructions for **current** proactivity / use case | Name, rules, proactivity |
+| `wiki settings restore identity` | `name` / `short_name` / `description` | Upkeep text, rules, pages |
+| `wiki settings restore all` | Identity + `selective` upkeep pack + use-case default `agent_rules` | Pages, integrations, `use_case` |
+| `wiki settings restore all --use-case-stock` | Same as `all`, and force `use_case = company` | Pages |
+
+Always preview first: add `--dry-run`. Non-interactive apply needs `-y`. Overview page **body** is never rewritten by restore.
+
+```bash
+wiki settings restore upkeep --dry-run
+wiki settings restore upkeep -y
+```
+
 ### Other knobs
 
-- **Org name / description** → `wiki.toml` or `wiki init`
+- **Org name / description** → `wiki.toml` or `wiki init` or `wiki settings restore identity`
 - **Connected tools** → `wiki install` / `wiki uninstall`
 - **How agents talk about the wiki** → `_templates/agent-pointer.md` + `internal/skills/wiki-context/`
+- **Delete pages only** → `wiki reset` (never touches `wiki.toml`)
 
 **Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh. Changing **use case** refreshes default agent rules for that preset. Selective trigger/instruction text that still matches the *old* use-case stock pack is refreshed to the new pack; hand-edited text is kept.
 

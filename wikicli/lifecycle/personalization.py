@@ -8,17 +8,21 @@ from types import ModuleType
 from typing import cast
 
 InitRunner = Callable[..., bool]
+SettingsRestoreRunner = Callable[..., bool]
 AgentRuleCatalog = dict[str, dict[str, str]]
 
 
-def _load_init_module() -> ModuleType | None:
-    module_name = f"{__package__}.init"
+def _load_optional_module(module_name: str) -> ModuleType | None:
     try:
         return import_module(module_name)
     except ModuleNotFoundError as exc:
         if exc.name != module_name:
             raise
         return None
+
+
+def _load_init_module() -> ModuleType | None:
+    return _load_optional_module(f"{__package__}.init")
 
 
 def load_init_capabilities() -> tuple[str, InitRunner | None]:
@@ -31,6 +35,19 @@ def load_init_capabilities() -> tuple[str, InitRunner | None]:
     if not isinstance(help_text, str) or not callable(runner):
         raise TypeError("lifecycle.init must define string RULE_HELP_TEXT and callable run_init")
     return help_text, cast(InitRunner, runner)
+
+
+def load_settings_restore() -> SettingsRestoreRunner | None:
+    """Load Brian-only settings restore (absent in private no-init checkouts)."""
+    module = _load_optional_module(f"{__package__}.settings_restore")
+    if module is None:
+        return None
+    runner = getattr(module, "run_settings_restore", None)
+    if runner is None:
+        return None
+    if not callable(runner):
+        raise TypeError("lifecycle.settings_restore must define callable run_settings_restore")
+    return cast(SettingsRestoreRunner, runner)
 
 
 def load_agent_rule_catalog() -> AgentRuleCatalog:
