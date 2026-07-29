@@ -277,6 +277,27 @@ def _existing_upkeep_pair(existing_upkeep: dict) -> tuple[list[str], str] | None
         return None
     return triggers, instructions
 
+
+def _resolve_upkeep(
+    existing_upkeep: dict,
+    use_case: str,
+    proactivity: str,
+    custom: tuple[list[str], str] | None,
+) -> tuple[list[str], str]:
+    """Resolve triggers/instructions for write + preview.
+
+    Order: this-run custom edit → keep existing text if posture unchanged → posture pack.
+    Missing/invalid prior proactivity is treated as selective (legacy manifests).
+    """
+    if custom is not None:
+        return custom
+    prior = _normalize_proactivity(existing_upkeep.get("proactivity")) or "selective"
+    chosen = proactivity if proactivity in UPKEEP_POSTURES else "selective"
+    preserved = _existing_upkeep_pair(existing_upkeep)
+    if preserved is not None and prior == chosen:
+        return preserved
+    return _upkeep_for_posture(use_case, chosen)
+
 RULE_HELP_TEXT = (
     "Optional agent behavior rules (comma-separated). "
     "people_tracking=keep pages for people & roles; "
@@ -738,18 +759,13 @@ def run_init(
                         parsed_rules = list(preset["default_rules"])
                     rules_resolved = True
 
-            # Proactivity posture (always shown). On re-run, keep existing triggers/instructions
-            # unless posture changes or the user custom-edits upkeep below.
+            # Proactivity posture (always shown). Keep existing triggers/instructions unless
+            # posture changes or the user custom-edits upkeep below.
             selected_proactivity = _select_proactivity_interactively(selected_proactivity)
             proactivity_resolved = True
-            posture_changed = bool(existing_proactivity) and existing_proactivity != selected_proactivity
-            preserved = _existing_upkeep_pair(existing_upkeep)
-            if preserved is not None and not posture_changed:
-                upkeep_triggers_preview, upkeep_instructions_preview = preserved
-            else:
-                upkeep_triggers_preview, upkeep_instructions_preview = _upkeep_for_posture(
-                    selected_use_case, selected_proactivity
-                )
+            upkeep_triggers_preview, upkeep_instructions_preview = _resolve_upkeep(
+                existing_upkeep, selected_use_case, selected_proactivity, None
+            )
 
             want_upkeep = run_confirm(
                 "Customize what agents offer to save? (triggers & instructions)",
@@ -842,18 +858,9 @@ def run_init(
     if not proactivity_resolved:
         selected_proactivity = existing_proactivity or "selective"
 
-    # Prefer interactive customizations; else preserve hand-edited upkeep on re-run;
-    # else posture defaults (selective → use-case preset).
-    if custom_upkeep is not None:
-        upkeep_triggers, upkeep_instructions = custom_upkeep
-    else:
-        preserved = _existing_upkeep_pair(existing_upkeep)
-        if preserved is not None:
-            upkeep_triggers, upkeep_instructions = preserved
-        else:
-            upkeep_triggers, upkeep_instructions = _upkeep_for_posture(
-                selected_use_case, selected_proactivity
-            )
+    upkeep_triggers, upkeep_instructions = _resolve_upkeep(
+        existing_upkeep, selected_use_case, selected_proactivity, custom_upkeep
+    )
 
     # Escape quotes in trigger strings for TOML double-quoted items.
     def _toml_str(value: str) -> str:

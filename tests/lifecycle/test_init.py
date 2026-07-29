@@ -372,6 +372,97 @@ def test_run_init_writes_proactivity_and_pointer_upkeep(tmp_path: Path):
     assert "Proactivity:" in pointer or "selective" in pointer
 
 
+def test_run_init_posture_change_rewrites_upkeep(tmp_path: Path, monkeypatch):
+    """Changing proactivity must replace triggers/instructions, not only the label."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Posture Flip Co",
+        company_file_slug="posture-flip",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        before = tomllib.load(f)
+    old_first = before["upkeep"]["triggers"][0]
+    capture_first = init_mod.UPKEEP_POSTURES["capture"]["triggers"][0]
+    assert old_first != capture_first
+
+    confirm_answers = iter([False, False, True])  # rules N, upkeep N, save Y
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+
+    def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        if single_select:
+            ids = [o[0] for o in (options or [])]
+            if "capture" in ids:
+                return "capture"
+            if "company" in ids:
+                return "company"
+            return ids[0] if ids else ""
+        return ""
+
+    monkeypatch.setattr(init_mod, "run_menu", menu)
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    assert run_init(tmp_path, non_interactive=False) is True
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        after = tomllib.load(f)
+    assert after["upkeep"]["proactivity"] == "capture"
+    assert after["upkeep"]["triggers"] == list(init_mod.UPKEEP_POSTURES["capture"]["triggers"])
+    assert old_first not in after["upkeep"]["triggers"]
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert capture_first in pointer
+    assert "prefer logging" in pointer
+
+
+def test_run_init_legacy_manifest_applies_new_posture(tmp_path: Path, monkeypatch):
+    """Pre-proactivity wiki.toml treated as selective; picking active rewrites packs."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Legacy Co",
+        company_file_slug="legacy-overview",
+        non_interactive=True,
+    )
+    toml_path = tmp_path / "wiki.toml"
+    text = toml_path.read_text(encoding="utf-8")
+    text = text.replace('proactivity = "selective"\n', "")
+    toml_path.write_text(text, encoding="utf-8")
+    with open(toml_path, "rb") as f:
+        legacy = tomllib.load(f)
+    assert "proactivity" not in legacy.get("upkeep", {})
+    old_first = legacy["upkeep"]["triggers"][0]
+    active_first = init_mod.UPKEEP_POSTURES["active"]["triggers"][0]
+
+    confirm_answers = iter([False, False, True])
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+
+    def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        if single_select:
+            ids = [o[0] for o in (options or [])]
+            if "active" in ids:
+                return "active"
+            if "company" in ids:
+                return "company"
+            return ids[0] if ids else ""
+        return ""
+
+    monkeypatch.setattr(init_mod, "run_menu", menu)
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    assert run_init(tmp_path, non_interactive=False) is True
+    with open(toml_path, "rb") as f:
+        after = tomllib.load(f)
+    assert after["upkeep"]["proactivity"] == "active"
+    assert after["upkeep"]["triggers"][0] == active_first
+    assert old_first not in after["upkeep"]["triggers"]
+
+
 def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
     """wiki.toml agent_rules must surface in the SessionStart payload agents actually see."""
     monkeypatch.setattr(
