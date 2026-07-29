@@ -15,20 +15,15 @@ from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
 from .lifecycle.hook import run_session_start_hook
 from .lifecycle.install import run_install
+from .lifecycle.personalization import load_init_capabilities
 from .lifecycle.reset import run_reset
 from .lifecycle.status import run_status
 from .lifecycle.sync import SyncState, sync_wiki
 from .lifecycle.uninstall import run_uninstall
 
 # Optional personalization module (present in public Brian checkouts only).
-try:
-    from .lifecycle.init import RULE_HELP_TEXT, run_init
-
-    _HAS_INIT = True
-except ImportError:  # pragma: no cover - checkouts without init
-    RULE_HELP_TEXT = ""
-    run_init = None  # type: ignore[assignment]
-    _HAS_INIT = False
+RULE_HELP_TEXT, run_init = load_init_capabilities()
+_HAS_INIT = run_init is not None
 
 C_GREEN = "\033[32m"
 C_RESET = "\033[0m"

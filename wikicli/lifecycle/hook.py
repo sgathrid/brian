@@ -6,6 +6,7 @@ from pathlib import Path
 from ..core.config import WikiConfig
 from ..core.page import WikiDatabase, WikiPage
 from ..core.resolve import resolve_context
+from .personalization import load_agent_rule_catalog
 from .sync import SyncState, sync_wiki
 
 CATALOG_BUDGET_CHARS = 8_000
@@ -166,14 +167,11 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
     # (lifecycle/init.py) is not present in this checkout.
     rules_block = ""
     if getattr(config, "agent_rules", None):
-        try:
-            from .init import ALL_AGENT_RULES
-        except ImportError:
-            ALL_AGENT_RULES = {}
+        all_agent_rules = load_agent_rule_catalog()
         rule_lines = []
         for r_key in config.agent_rules:
-            if r_key in ALL_AGENT_RULES:
-                rule_lines.append(ALL_AGENT_RULES[r_key]["prompt_rule"])
+            if r_key in all_agent_rules:
+                rule_lines.append(all_agent_rules[r_key]["prompt_rule"])
         if rule_lines:
             rules_block = "## Active agent rules\n" + "\n".join(rule_lines) + "\n\n"
 
