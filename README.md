@@ -29,19 +29,10 @@
   <sub>Inspired by <a href="https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f">Karpathy’s LLM Wiki</a> pattern</sub>
 </p>
 
-> [!TIP]
-> **60-second setup**
-> ```bash
-> git clone git@github.com:<you>/brian.git && cd brian
-> uv sync && uv run wiki init && uv run wiki install
-> ```
-> Then open Claude, Cursor, Codex, or Gemini and ask something only your company would know.
-
 > [!IMPORTANT]
 > **A living company brain — not a code docs site.**
 > Brian holds decisions, product truth, policies, client context, and the stuff that usually lives in Slack threads and people's heads. Agents read and draft updates as you work. You approve writes, then `git push` when you're ready to share.
 
----
 
 ## Why Brian
 
@@ -56,8 +47,6 @@ Every AI session starts from zero. So you paste the same briefs, policies, and �
 Not a RAG platform. Not another chatbot. A persistent company brain your tools can finally remember.
 
 The idea follows [Andrej Karpathy’s LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) pattern: don’t re-discover knowledge from raw files on every question — maintain a compounding markdown wiki the LLM keeps current. Brian turns that pattern into a **shared company brain** with installable agent hooks, governed updates, and git sync.
-
----
 
 ## What you can do
 
@@ -115,17 +104,9 @@ Then continue with `uv sync` above.
 wiki init
 ```
 
-Asks for your **organization name** and **use case**. That’s enough for most teams.
+An interactive setup guides you through your **use case** (Company, IT helpdesk, Engineering, Research, or Personal), **organization name**, and optional **agent behavior rules** (like tracking people, hardware assets, or ADRs).
 
-Optional later (or pass flags now):
-
-```bash
-# IT helpdesk preset with people + asset tracking:
-wiki init -c it_service_desk --rules people_tracking,asset_tracking,security_notice -y
-
-# Company KB, enable people tracking only:
-wiki init -c company --rules people_tracking -y
-```
+*(For automated or non-interactive setups, see [Customize](#customize) below.)*
 
 ### 3. Connect your AI tools
 
@@ -150,7 +131,23 @@ The installer detects what’s on your machine and hooks your configured knowled
 └
 ```
 
-### 4. Try it
+### 4. Populate your knowledge base
+
+Start adding knowledge in two ways:
+
+- **Conversational (Quick & Direct):** Tell any connected agent in plain English:
+  > “Add our refund policy to the wiki: 30-day money-back guarantee, contact support@acme.com.”
+  > “Here is our tech stack: Python, FastAPI, and Postgres. Create our architecture pages.”
+
+- **Document Ingestion (`raw/` Inbox):** Drop existing specs, PDFs, or handbooks into the `raw/` folder (a local, git-ignored inbox), then ask your agent:
+  > “Ingest `raw/employee_handbook.pdf` into the wiki.”
+
+  The agent synthesizes raw documents into structured markdown under `wiki/` with source provenance citations (`Compiled from raw/...`).
+
+> [!TIP]
+> **Seed 2–3 core docs for better cross-linking:** Ingesting a few foundational documents upfront (e.g., product overview, tech stack spec, team directory) establishes the initial web of `[[Wikilinks]]` and tags. This helps agents automatically connect subsequent notes to the right context.
+
+### 5. Try it
 
 In any connected agent:
 
