@@ -15,7 +15,7 @@ from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
 from .lifecycle.hook import run_session_start_hook
 from .lifecycle.install import run_install
-from .lifecycle.personalization import load_init_capabilities, load_settings_restore
+from .lifecycle.personalization import load_init_capabilities
 from .lifecycle.reset import run_reset
 from .lifecycle.status import run_status
 from .lifecycle.sync import SyncState, sync_wiki
@@ -24,8 +24,6 @@ from .lifecycle.uninstall import run_uninstall
 # Optional personalization module (present in public Brian checkouts only).
 RULE_HELP_TEXT, run_init = load_init_capabilities()
 _HAS_INIT = run_init is not None
-run_settings_restore = load_settings_restore()
-_HAS_SETTINGS_RESTORE = run_settings_restore is not None
 
 C_GREEN = "\033[32m"
 C_RESET = "\033[0m"
@@ -249,70 +247,41 @@ def main():
     p_sync = subparsers.add_parser("sync", help="Safely refresh the local company wiki from origin/main")
     p_sync.add_argument("--force", action="store_true", help="Bypass the session sync throttle")
 
-    # wiki reset [type...] — knowledge pages only (not wiki.toml settings)
+    # wiki reset [type...] — pages, or (Brian) user settings via optional module
     p_reset = subparsers.add_parser(
         "reset",
-        help="Reset or purge wiki data payload (pages only — not settings)",
+        help="Reset wiki pages or restore stock user settings",
         description=(
-            "Delete wiki pages (full / scope / orphans). Does not touch wiki.toml. "
-            "To restore stock upkeep text or org name, use: wiki settings restore …"
+            "Page modes: full / scope / orphans (delete knowledge pages). "
+            "User settings (when available): wiki reset settings — restores stock "
+            "wiki.toml packs/names without deleting pages. "
+            "Natural-language triggers/instructions live under [upkeep] in wiki.toml."
         ),
     )
-    p_reset.add_argument("targets", nargs="*", help="Reset mode (full, scope, orphans)")
-    p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
-    p_reset.add_argument("--dry-run", action="store_true", help="Preview reset without deleting files")
     p_reset.add_argument(
-        "-y", "--yes", action="store_true", help="Confirm deletion (required for any non-dry-run reset)"
+        "targets",
+        nargs="*",
+        help="Mode: full | scope | orphans | settings [upkeep|identity|all]",
+    )
+    p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
+    p_reset.add_argument("--dry-run", action="store_true", help="Preview without making changes")
+    p_reset.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Confirm (required non-interactively for page delete or settings restore)",
     )
     p_reset.add_argument(
         "--include-raw",
         action="store_true",
-        help="Also delete raw/ source documents (git-ignored — this is IRREVERSIBLE)",
+        help="With full: also delete raw/ source documents (git-ignored — IRREVERSIBLE)",
+    )
+    p_reset.add_argument(
+        "--use-case-stock",
+        action="store_true",
+        help="With settings all: also force use_case=company",
     )
 
-    # wiki settings restore — Brian product only (optional module)
-    if _HAS_SETTINGS_RESTORE:
-        p_settings = subparsers.add_parser(
-            "settings",
-            help="Restore wiki.toml personalization to stock defaults (not page delete)",
-            description=(
-                "Rewrite selected fields in wiki.toml from stock packs. "
-                "Natural-language triggers/instructions live under [upkeep] — edit there anytime. "
-                "Does not delete wiki pages (see wiki reset)."
-            ),
-        )
-        settings_sub = p_settings.add_subparsers(dest="settings_cmd")
-        p_restore = settings_sub.add_parser(
-            "restore",
-            help="Restore upkeep text, org identity, or all settings",
-        )
-        p_restore.add_argument(
-            "target",
-            nargs="?",
-            default="",
-            help="upkeep | identity | all  (omit for interactive menu)",
-        )
-        p_restore.add_argument("--dry-run", action="store_true", help="Preview without writing wiki.toml")
-        p_restore.add_argument(
-            "-y",
-            "--yes",
-            action="store_true",
-            help="Confirm restore (required non-interactively)",
-        )
-        p_restore.add_argument(
-            "--use-case-stock",
-            action="store_true",
-            help="With target=all, also force use_case=company",
-        )
-    else:
-        subparsers.add_parser(
-            "settings",
-            help="Not available in this checkout — edit wiki.toml instead",
-            description=(
-                "Settings restore ships with interactive init (public Brian). "
-                "Here, edit wiki.toml ([wiki], [upkeep]) directly."
-            ),
-        )
 
     args = parser.parse_args()
 
@@ -481,32 +450,8 @@ def main():
             non_interactive=args.yes,
             confirmed=args.yes,
             include_raw=args.include_raw,
-        )
-
-    elif args.subcommand == "settings":
-        if not _HAS_SETTINGS_RESTORE or run_settings_restore is None:
-            print("wiki settings is not available in this checkout.", file=sys.stderr)
-            print(
-                "Edit wiki.toml instead:\n"
-                "  [wiki]   name, short_name, description, agent_rules\n"
-                "  [upkeep] proactivity (label), triggers, instructions\n"
-                "See README → Customize agent upkeep.",
-                file=sys.stderr,
-            )
-            sys.exit(2)
-        cmd = getattr(args, "settings_cmd", None)
-        if cmd != "restore":
-            print("usage: wiki settings restore {upkeep,identity,all} [--dry-run] [-y]", file=sys.stderr)
-            sys.exit(2)
-        if not run_settings_restore(
-            repo_root,
-            getattr(args, "target", "") or "",
-            dry_run=bool(getattr(args, "dry_run", False)),
-            non_interactive=bool(getattr(args, "yes", False)),
-            confirmed=bool(getattr(args, "yes", False)),
             stock_use_case=bool(getattr(args, "use_case_stock", False)),
-        ):
-            sys.exit(1)
+        )
 
 
 if __name__ == "__main__":

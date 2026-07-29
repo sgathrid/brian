@@ -1,4 +1,4 @@
-"""Tests for Brian-only wiki settings restore (wiki.toml personalization)."""
+"""Tests for Brian-only wiki reset settings (wiki.toml personalization)."""
 
 from __future__ import annotations
 
@@ -137,14 +137,44 @@ def test_restore_unknown_target(tmp_path: Path):
     assert ei.value.code == 2
 
 
-def test_cli_settings_restore_help():
+def test_cli_reset_settings_help():
     from wikicli.cli import main
 
     old = sys.argv
     try:
-        sys.argv = ["wiki", "settings", "restore", "-h"]
+        sys.argv = ["wiki", "reset", "-h"]
         with pytest.raises(SystemExit) as ei:
             main()
         assert ei.value.code == 0
     finally:
         sys.argv = old
+
+
+def test_reset_dispatches_settings(tmp_path: Path):
+    """wiki reset settings routes through run_reset without deleting pages."""
+    from wikicli.lifecycle.reset import run_reset
+
+    toml_path = _seed_custom(tmp_path)
+    before_pages = list((tmp_path / "wiki").rglob("*.md"))
+    run_reset(
+        tmp_path,
+        ["settings", "upkeep"],
+        dry_run=False,
+        non_interactive=True,
+        confirmed=True,
+    )
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    stock_t, stock_i = _upkeep_for_posture("engineering", "active")
+    assert data["upkeep"]["triggers"] == stock_t
+    assert data["upkeep"]["instructions"].strip() == stock_i.strip()
+    assert list((tmp_path / "wiki").rglob("*.md")) == before_pages
+
+
+def test_reset_settings_missing_target_help(tmp_path: Path, capsys):
+    from wikicli.lifecycle.reset import run_reset
+
+    _seed_custom(tmp_path)
+    with pytest.raises(SystemExit) as ei:
+        run_reset(tmp_path, ["settings"], dry_run=True, non_interactive=True, confirmed=True)
+    assert ei.value.code == 2

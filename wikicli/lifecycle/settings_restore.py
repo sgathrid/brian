@@ -192,23 +192,23 @@ def run_settings_restore(
                     False,
                 ),
             ],
-            title="Brian settings restore",
+            title="Brian Wiki Reset",
             single_select=True,
         )
         target = sel.strip().lower()
 
     if target not in RESTORE_TARGETS:
-        print("wiki settings restore: choose a target.", file=sys.stderr)
-        print("  wiki settings restore upkeep     # stock triggers + instructions", file=sys.stderr)
-        print("  wiki settings restore identity   # name / short_name / description", file=sys.stderr)
-        print("  wiki settings restore all        # identity + upkeep + default rules", file=sys.stderr)
+        print("wiki reset settings: choose a target.", file=sys.stderr)
+        print("  wiki reset settings upkeep     # stock triggers + instructions", file=sys.stderr)
+        print("  wiki reset settings identity   # name / short_name / description", file=sys.stderr)
+        print("  wiki reset settings all        # identity + upkeep + default rules", file=sys.stderr)
         print("  add --dry-run to preview; -y to confirm non-interactively.", file=sys.stderr)
-        print("  wiki reset still only deletes pages — not settings.", file=sys.stderr)
+        print("  page delete remains: wiki reset full|scope|orphans", file=sys.stderr)
         raise SystemExit(2)
 
     toml_path = repo_root / "wiki.toml"
     if not toml_path.is_file():
-        print("wiki settings restore: no wiki.toml found. Run `wiki init` first.", file=sys.stderr)
+        print("wiki reset settings: no wiki.toml found. Run `wiki init` first.", file=sys.stderr)
         raise SystemExit(2)
 
     existing = _load_existing_manifest(toml_path)
@@ -216,7 +216,7 @@ def run_settings_restore(
     after = _planned_snapshot(before, target, repo_root, stock_use_case=stock_use_case)
     preview = _preview_lines(before, after)
 
-    print(f"┌  {C_BOLD}Brian settings restore{' (DRY RUN)' if dry_run else ''}{C_RESET}")
+    print(f"┌  {C_BOLD}Brian reset · user settings{' (DRY RUN)' if dry_run else ''}{C_RESET}")
     print("│")
     print(f"│  target: {C_CYAN}{target}{C_RESET}")
     print(f"│  file:   {C_CYAN}wiki.toml{C_RESET}  {C_DIM}(natural-language [upkeep] is the source of truth){C_RESET}")
@@ -240,18 +240,18 @@ def run_settings_restore(
             confirmed = run_confirm(
                 f"Restore {target} settings to defaults?",
                 default=False,
-                title="Brian settings restore",
+                title="Brian Wiki Reset",
                 confirm_label=f"restore {target}",
                 cancel_label="keep current",
             )
             if not confirmed:
-                print("wiki settings restore: cancelled.", file=sys.stderr)
+                print("wiki reset settings: cancelled.", file=sys.stderr)
                 return False
         if not confirmed:
             print(
-                f"wiki settings restore: needs confirmation.\n"
-                f"  preview:  wiki settings restore {target} --dry-run\n"
-                f"  apply:    wiki settings restore {target} -y",
+                f"wiki reset settings: needs confirmation.\n"
+                f"  preview:  wiki reset settings {target} --dry-run\n"
+                f"  apply:    wiki reset settings {target} -y",
                 file=sys.stderr,
             )
             raise SystemExit(2)
@@ -299,5 +299,5 @@ def run_settings_restore(
     print()
     print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  ([upkeep] triggers & instructions)")
     print(f"   Verify:        {C_CYAN}wiki status{C_RESET}  · start a new agent session")
-    print(f"   Pages only:    {C_CYAN}wiki reset{C_RESET}  (never touches settings)")
+    print(f"   Pages only:    {C_CYAN}wiki reset full|scope|orphans{C_RESET}")
     return True

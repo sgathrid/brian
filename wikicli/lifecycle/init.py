@@ -379,7 +379,7 @@ def write_wiki_toml(
 # [upkeep]     = proactivity + when agents should offer to update the wiki
 # Re-run `wiki init` anytime to change settings interactively
 # (overview page & hand-edited upkeep text are preserved).
-# Restore stock packs/names: `wiki settings restore …` (does not delete pages).
+# Restore stock packs/names: `wiki reset settings` (does not delete pages).
 
 [wiki]
 name = "{_toml_escape(str(org_name))}"
@@ -1030,7 +1030,7 @@ def run_init(
     print()
     print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  (agent_rules, name, [upkeep])")
     print(f"   Or re-run:     {C_CYAN}wiki init{C_RESET}  (current values pre-selected)")
-    print(f"   Stock restore: {C_CYAN}wiki settings restore upkeep|identity|all{C_RESET}")
+    print(f"   Stock restore: {C_CYAN}wiki reset settings{C_RESET}  (upkeep|identity|all)")
     print(f"   How to customize: README → {C_BOLD}Customize in plain English{C_RESET}")
     print()
     print(f"   {C_BOLD}Next:{C_RESET} {C_CYAN}wiki install{C_RESET}  → connect Claude, Cursor, Codex, Gemini, …")
