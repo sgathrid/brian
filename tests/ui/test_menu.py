@@ -37,6 +37,32 @@ class TestMenu(unittest.TestCase):
 
         res_false = run_confirm("Confirm reset?", default=False, non_interactive=True)
         self.assertFalse(res_false)
+        res_true = run_confirm("Save setup?", default=True, non_interactive=True)
+        self.assertTrue(res_true)
+
+    def test_run_menu_multi_select_respects_preselected(self):
+        options = [
+            ("people_tracking", "Track people", "roles", True),
+            ("adrs", "Record ADRs", "design", False),
+            ("quick_capture", "Fast notes", "inbox", True),
+        ]
+        result = run_menu(
+            "Which optional behaviors?",
+            options=options,
+            non_interactive=True,
+            single_select=False,
+        )
+        self.assertEqual(result, "people_tracking quick_capture")
+
+    def test_single_select_hint_mentions_space(self):
+        """Hint copy documents enter/space for single-select (Yes/No + use case)."""
+        import inspect
+
+        from wikicli.ui import menu as menu_mod
+
+        source = inspect.getsource(menu_mod.run_menu)
+        self.assertIn("enter/space select", source)
+        self.assertIn('key == "SPACE"', source)
 
     def test_run_scroll_viewer_non_interactive(self):
         import io

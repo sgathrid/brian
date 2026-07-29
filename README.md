@@ -104,7 +104,12 @@ Then continue with `uv sync` above.
 wiki init
 ```
 
-An interactive setup guides you through your **use case** (Company, IT helpdesk, Engineering, Research, or Personal), **organization name**, and optional **agent behavior rules** (like tracking people, hardware assets, or ADRs).
+An interactive setup guides you through your **use case** (Company, IT helpdesk, Engineering, Research, or Personal), **organization name**, and optional extras:
+
+- **Agent behavior** — multi-select with ↑↓ / space (people tracking, assets, ADRs, …)
+- **What agents offer to save** — plain-English triggers & instructions (`[upkeep]`)
+
+Defaults are fine for most teams; advanced steps are opt-in. Re-run `wiki init` anytime — current values are pre-selected, and your overview page + hand-edited upkeep text are preserved.
 
 *(For automated or non-interactive setups, see [Customize](#customize) below.)*
 
@@ -294,7 +299,9 @@ Ordinary headings, bullets, and links. Agents follow `wiki/CONVENTIONS.md` when 
 
 Optional switches that change what agents try to remember. **Off by default** for a general company brain (including people tracking).
 
-Edit `wiki.toml`:
+**During `wiki init`:** choose **Customize agent behavior**, then multi-select with ↑↓ / **space** / enter. Same control language as Yes/No confirms (enter or space).
+
+Or edit `wiki.toml`:
 
 ```toml
 [wiki]
@@ -321,19 +328,44 @@ After editing:
 
 1. Save `wiki.toml`
 2. Either re-run `wiki init -y` (refreshes agent pointer text) **or** just start a new agent session — the SessionStart hook reads `agent_rules` live
-3. Or answer “yes” to **Customize agent behavior** the next time you run `wiki init` interactively
+3. Or re-run `wiki init` interactively and multi-select behaviors again (current rules are pre-checked)
 
 ```bash
 # Same thing from the CLI:
 wiki init --rules people_tracking,security_notice -y
 ```
 
+### What’s worth saving (`[upkeep]`)
+
+Tells agents **when** to offer a wiki update and **how** to phrase it. Presets ship per use case; customize in init (“Customize what agents offer to save?”) or edit here:
+
+```toml
+[upkeep]
+triggers = [
+    "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
+    "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report",
+]
+instructions = """
+Then say which page to add or update and why, and let the user decide. Never commit or push the wiki yourself.
+Refactors, dependency bumps, tests and formatting need nothing — 'already current' is a valid answer; do not invent work.
+"""
+```
+
+Examples of good triggers (plain English):
+
+- Shipping a user-visible feature or API change
+- Updating a customer-facing policy or pricing doc
+- Closing a decision in a design review
+
+Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you opt into editing it again.
+
 ### Other knobs
 
-- **What’s worth saving** → `[upkeep]` in `wiki.toml`
 - **Org name / description** → `wiki.toml` or `wiki init`
 - **Connected tools** → `wiki install` / `wiki uninstall`
 - **How agents talk about the wiki** → `_templates/agent-pointer.md` + `internal/skills/wiki-context/`
+
+**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh.
 
 Everything important is text. Fork it and make it yours.
 

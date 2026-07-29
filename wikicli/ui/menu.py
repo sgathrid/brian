@@ -302,9 +302,9 @@ def run_menu(
             lines.append(f"{S_RAIL}")
             lines.append(f"{S_RAIL}  {prompt}")
             if single_select:
-                lines.append(f"{S_RAIL}  {C_DIM}(↑↓ move, enter select){C_RESET}")
+                lines.append(f"{S_RAIL}  {C_DIM}(↑↓ move, enter/space select){C_RESET}")
             else:
-                lines.append(f"{S_RAIL}  {C_DIM}(↑↓ move, space select, a toggle all, enter confirm){C_RESET}")
+                lines.append(f"{S_RAIL}  {C_DIM}(↑↓ move, space toggle, a all, enter confirm){C_RESET}")
             lines.append(f"{S_RAIL}")
 
             for i, item in enumerate(items):
@@ -368,6 +368,14 @@ def run_menu(
                 for i, item in enumerate(items):
                     item["selected"] = i == cursor
                 render()
+            elif single_select and key == "SPACE":
+                # Space confirms the highlighted option (same as Enter) so Yes/No
+                # and other single-select steps share one vocabulary with multi-select.
+                for i, item in enumerate(items):
+                    item["selected"] = i == cursor
+                render(submit_state="submit")
+                selected_ids = [item["id"] for item in items if item.get("selected", False)]
+                break
             elif not single_select and key == "SPACE":
                 items[cursor]["selected"] = not items[cursor].get("selected", False)
                 render()

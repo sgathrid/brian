@@ -71,7 +71,7 @@ def test_run_init_non_interactive_company_defaults(tmp_path: Path):
     assert data["wiki"]["use_case"] == "company"
     assert data["wiki"]["agent_rules"] == []
     assert data["paths"]["company_file"] == "wiki/entities/acme-overview.md"
-    assert "Edit freely" in toml_file.read_text(encoding="utf-8")
+    assert "edit freely in plain English" in toml_file.read_text(encoding="utf-8")
 
     overview = tmp_path / "wiki" / "entities" / "acme-overview.md"
     assert overview.is_file()
@@ -197,6 +197,153 @@ def test_run_init_can_clear_rules_with_empty_list(tmp_path: Path):
     with open(tmp_path / "wiki.toml", "rb") as f:
         data = tomllib.load(f)
     assert data["wiki"]["agent_rules"] == []
+
+
+def test_select_rules_interactively_uses_multi_select(monkeypatch):
+    from wikicli.lifecycle import init as init_mod
+
+    calls: list[dict] = []
+
+    def fake_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        calls.append({"prompt": prompt, "options": options, "single_select": single_select})
+        assert single_select is False
+        assert options is not None
+        # Seed should pre-check people_tracking
+        selected = {o[0]: o[3] for o in options}
+        assert selected["people_tracking"] is True
+        assert selected["adrs"] is False
+        return "people_tracking security_notice"
+
+    monkeypatch.setattr(init_mod, "run_menu", fake_menu)
+    chosen = init_mod._select_rules_interactively(["adrs"], existing_rules=["people_tracking"])
+    assert chosen == ["people_tracking", "security_notice"]
+    assert len(calls) == 1
+
+
+def test_select_rules_interactively_empty_selection(monkeypatch):
+    from wikicli.lifecycle import init as init_mod
+
+    monkeypatch.setattr(init_mod, "run_menu", lambda *a, **k: "")
+    assert init_mod._select_rules_interactively(["adrs"], existing_rules=["adrs"]) == []
+
+
+def test_customize_upkeep_interactively_keep_defaults(monkeypatch):
+    from wikicli.lifecycle import init as init_mod
+
+    # Keep triggers (True), skip editing instructions (False)
+    answers = iter([True, False])
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(answers))
+
+    triggers = ["Trigger A", "Trigger B"]
+    instructions = "Leave the user in charge."
+    out_t, out_i = init_mod._customize_upkeep_interactively("company", triggers, instructions)
+    assert out_t == triggers
+    assert out_i == instructions
+
+
+def test_customize_upkeep_interactively_edits_both(monkeypatch):
+    from wikicli.lifecycle import init as init_mod
+
+    answers = iter([False, True])  # edit triggers, edit instructions
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(answers))
+    monkeypatch.setattr(
+        init_mod,
+        "_prompt_multiline",
+        lambda header, blank_keeps_current=True: (
+            ["New trigger one", "New trigger two"]
+            if "triggers" in header.lower()
+            else ["Offer updates only when asked."]
+        ),
+    )
+
+    out_t, out_i = init_mod._customize_upkeep_interactively(
+        "engineering",
+        ["Old trigger"],
+        "Old instructions",
+    )
+    assert out_t == ["New trigger one", "New trigger two"]
+    assert out_i == "Offer updates only when asked."
+
+
+def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatch):
+    """Interactive path: multi-select rules + custom upkeep write through to wiki.toml."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+
+    # Sequence of run_confirm: customize rules? Y, customize upkeep? Y, keep triggers? N,
+    # edit instructions? Y, save? Y
+    confirm_answers = iter([True, True, False, True, True])
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+
+    def fake_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        if single_select:
+            return "company"
+        return "adrs strict_sources"
+
+    monkeypatch.setattr(init_mod, "run_menu", fake_menu)
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: "Interactive Co")
+    monkeypatch.setattr(
+        init_mod,
+        "_prompt_multiline",
+        lambda header, blank_keeps_current=True: (
+            ["Ship a user-facing change", "Update a policy doc"]
+            if "triggers" in header.lower()
+            else ["Ask before writing. Never push."]
+        ),
+    )
+    # Force interactive branch even without a real TTY.
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    ok = run_init(tmp_path, non_interactive=False)
+    assert ok is True
+
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        data = tomllib.load(f)
+
+    assert data["wiki"]["name"] == "Interactive Co"
+    assert data["wiki"]["use_case"] == "company"
+    assert data["wiki"]["agent_rules"] == ["adrs", "strict_sources"]
+    assert data["upkeep"]["triggers"] == ["Ship a user-facing change", "Update a policy doc"]
+    assert "Ask before writing" in data["upkeep"]["instructions"]
+
+    toml_text = (tmp_path / "wiki.toml").read_text(encoding="utf-8")
+    assert "edit freely in plain English" in toml_text
+    assert "[upkeep]" in toml_text
+
+
+def test_run_init_interactive_rerun_preserves_upkeep_when_skipped(tmp_path: Path, monkeypatch):
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Preserve Co",
+        company_file_slug="preserve-overview",
+        non_interactive=True,
+    )
+    toml_path = tmp_path / "wiki.toml"
+    text = toml_path.read_text(encoding="utf-8")
+    text = text.replace(
+        'instructions = """',
+        'instructions = """\nKEEP_ME_ON_RERUN\n',
+        1,
+    )
+    toml_path.write_text(text, encoding="utf-8")
+
+    # customize rules? N, customize upkeep? N, save? Y
+    confirm_answers = iter([False, False, True])
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+    monkeypatch.setattr(
+        init_mod,
+        "run_menu",
+        lambda prompt, options=None, title="Brian setup", non_interactive=False, single_select=False: "company",
+    )
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    assert run_init(tmp_path, non_interactive=False) is True
+    assert "KEEP_ME_ON_RERUN" in toml_path.read_text(encoding="utf-8")
 
 
 def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):

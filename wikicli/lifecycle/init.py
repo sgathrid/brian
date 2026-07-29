@@ -235,44 +235,144 @@ def _normalize_rules(raw: list[str] | str | None) -> list[str]:
     return out
 
 
-def _prompt_yn(prompt_text: str, default: bool) -> bool:
-    """Plain Y/n (or y/N) prompt for optional toggles."""
-    suffix = "Y/n" if default else "y/N"
-    if not sys.stdin.isatty():
-        return default
-    try:
-        val = input(f"{prompt_text} [{suffix}]: ").strip().lower()
-    except EOFError:
-        return default
-    if not val:
-        return default
-    if val in {"y", "yes"}:
-        return True
-    if val in {"n", "no"}:
-        return False
-    return default
+def _prompt_multiline(header: str, *, blank_keeps_current: bool = True) -> list[str] | None:
+    """Read lines until a blank line. Returns None if the user keeps current (first line empty)."""
+    print("│")
+    print(f"│  {header}")
+    if blank_keeps_current:
+        print(f"│  {C_DIM}One item per line. Empty line finishes. First line empty = keep current.{C_RESET}")
+    else:
+        print(f"│  {C_DIM}One item per line. Empty line finishes.{C_RESET}")
+    print("│")
+    lines: list[str] = []
+    while True:
+        try:
+            line = input("│  > ").rstrip()
+        except EOFError:
+            break
+        if not line:
+            break
+        lines.append(line)
+    if not lines and blank_keeps_current:
+        return None
+    return lines
 
 
 def _select_rules_interactively(default_rules: list[str], existing_rules: list[str] | None = None) -> list[str]:
-    """Optional step: toggle each rule in plain English with Y/n defaults."""
+    """Optional step: multi-select agent behaviors with space toggles."""
     seed = list(existing_rules) if existing_rules is not None else list(default_rules)
     seed_set = set(seed)
 
     print("│")
-    print(f"│  {C_BOLD}Optional agent behavior{C_RESET} {C_DIM}(press Enter to keep the default){C_RESET}")
-    print("│  These change what agents try to remember. You can edit them later in wiki.toml.")
+    print(f"│  {C_BOLD}Optional agent behavior{C_RESET}")
+    print("│  These change what agents try to remember.")
+    print(f"│  {C_DIM}Space toggles · edit later in wiki.toml → agent_rules, or re-run init.{C_RESET}")
     print("│")
 
-    chosen: list[str] = []
-    for key, meta in ALL_AGENT_RULES.items():
-        default_on = key in seed_set
-        # Prefer a slightly stronger default nudge when the preset enables the rule.
-        label = meta["label"]
-        hint = meta["hint"]
-        on = _prompt_yn(f"│  • {label} — {hint}", default_on)
-        if on:
-            chosen.append(key)
-    return chosen
+    options = [
+        (key, meta["label"], meta["hint"], key in seed_set)
+        for key, meta in ALL_AGENT_RULES.items()
+    ]
+    sel = run_menu(
+        "Which optional behaviors should agents use?",
+        options=options,
+        title="Brian setup",
+        single_select=False,
+    )
+    if not sel.strip():
+        return []
+    return _normalize_rules(sel.split())
+
+
+UPKEEP_EXAMPLES: dict[str, list[str]] = {
+    "company": [
+        "Shipping a user-visible feature or API change",
+        "Updating a customer-facing policy or pricing doc",
+        "Closing a decision in a design review",
+    ],
+    "it_service_desk": [
+        "Assigning or retiring a hardware asset",
+        "Changing an access-request or offboarding SOP",
+        "Updating a vendor license or escalation path",
+    ],
+    "engineering": [
+        "Landing an architectural decision (ADR-worthy)",
+        "Breaking API contract or schema migration",
+        "Changing deploy pipeline or security model",
+    ],
+    "research": [
+        "Ingesting a new paper, protocol, or dataset",
+        "Revising domain terminology or methodology",
+        "Updating trial status or key findings",
+    ],
+    "personal": [
+        "Hitting a project milestone or key decision",
+        "Changing a workflow, tool setup, or reference note",
+    ],
+}
+
+
+def _customize_upkeep_interactively(
+    use_case: str,
+    current_triggers: list[str],
+    current_instructions: str,
+) -> tuple[list[str], str]:
+    """Optional NL step: review/edit upkeep triggers and instructions."""
+    examples = UPKEEP_EXAMPLES.get(use_case, UPKEEP_EXAMPLES["company"])
+    triggers = list(current_triggers)
+    instructions = str(current_instructions or "").strip()
+
+    print("│")
+    print(f"│  {C_BOLD}What agents offer to save{C_RESET} {C_DIM}([upkeep] in wiki.toml){C_RESET}")
+    print("│  Triggers = when agents should offer a wiki update.")
+    print("│  Instructions = how they should phrase the offer.")
+    print("│")
+    print(f"│  {C_DIM}Examples:{C_RESET}")
+    for ex in examples:
+        print(f"│    • {ex}")
+    print("│")
+    print(f"│  {C_BOLD}Current triggers:{C_RESET}")
+    if triggers:
+        for i, t in enumerate(triggers, 1):
+            print(f"│    {i}. {t}")
+    else:
+        print("│    (none)")
+    print("│")
+
+    keep_triggers = run_confirm(
+        "Keep these triggers?",
+        default=True,
+        title="Brian setup",
+        confirm_label="keep triggers",
+        cancel_label="edit triggers",
+    )
+    if not keep_triggers:
+        edited = _prompt_multiline("Enter triggers (plain English):")
+        if edited is not None:
+            triggers = edited
+
+    print("│")
+    print(f"│  {C_BOLD}Current instructions:{C_RESET}")
+    for line in (instructions or "(none)").splitlines() or ["(none)"]:
+        print(f"│    {line}")
+    print("│")
+
+    edit_instr = run_confirm(
+        "Edit instructions?",
+        default=False,
+        title="Brian setup",
+        confirm_label="edit instructions",
+        cancel_label="keep instructions",
+    )
+    if edit_instr:
+        edited_lines = _prompt_multiline(
+            "Enter instructions (plain English):",
+            blank_keeps_current=True,
+        )
+        if edited_lines is not None:
+            instructions = "\n".join(edited_lines).strip()
+
+    return triggers, instructions
 
 
 def _generate_overview_content(
@@ -404,9 +504,10 @@ def run_init(
     """Initializes wiki.toml, optional agent rules, and overview entity page.
 
     Interactive flow keeps the happy path short:
-      1. Org name
-      2. Use case
-      3. Optional "customize agent behavior?" → plain-English Y/n toggles
+      1. Use case (always shown; current value pre-selected on re-run)
+      2. Org name
+      3. Optional agent-behavior multi-select (space toggles)
+      4. Optional upkeep triggers/instructions (plain English)
     Re-runs preserve custom upkeep text and existing overview pages.
     """
     repo_root = repo_root.resolve()
@@ -415,29 +516,46 @@ def run_init(
     existing_wiki = existing.get("wiki", {}) if isinstance(existing.get("wiki"), dict) else {}
     existing_paths = existing.get("paths", {}) if isinstance(existing.get("paths"), dict) else {}
     existing_upkeep = existing.get("upkeep", {}) if isinstance(existing.get("upkeep"), dict) else {}
+    is_rerun = toml_path.is_file()
 
     interactive = not non_interactive and sys.stdin.isatty()
     rules_explicit = agent_rules is not None and agent_rules != ""
 
     raw_base_name = repo_root.name.replace("-", " ").replace("_", " ").title() or "Organization"
 
-    selected_use_case = use_case.lower() if use_case and use_case.lower() in USE_CASE_PRESETS else ""
-    if not selected_use_case and existing_wiki.get("use_case") in USE_CASE_PRESETS:
-        selected_use_case = str(existing_wiki["use_case"])
+    # Flag wins; otherwise seed from existing so re-run can pre-select in the menu.
+    flag_use_case = use_case.lower() if use_case and use_case.lower() in USE_CASE_PRESETS else ""
+    existing_use_case = (
+        str(existing_wiki["use_case"])
+        if existing_wiki.get("use_case") in USE_CASE_PRESETS
+        else ""
+    )
+    selected_use_case = flag_use_case or existing_use_case
 
     parsed_rules = _normalize_rules(agent_rules) if rules_explicit else []
     existing_rules = _normalize_rules(existing_wiki.get("agent_rules", []))
+    # True once the user (or --rules) has chosen a rules list, including an empty one.
+    rules_resolved = rules_explicit
+    # Interactive upkeep overrides; None means "resolve from preset/existing later".
+    custom_upkeep: tuple[list[str], str] | None = None
 
     if interactive:
         print(f"┌  {C_BOLD}Brian setup{C_RESET}")
         print("│")
-        print("│  A few questions to name your knowledge base. You can change anything later.")
+        print("│  A few questions. Change anything later in wiki.toml or by re-running init.")
+        if is_rerun:
+            print(
+                f"│  {C_YELLOW}Re-run:{C_RESET} current values are pre-selected. "
+                "Overview page & custom upkeep text are kept unless you change them."
+            )
         print("│")
         try:
-            # --- Minimal path: org name, then use case ---
-            if not selected_use_case:
+            # Always show use-case menu interactively (pre-select current / company).
+            if not flag_use_case:
+                preselect = selected_use_case or "company"
                 use_case_options = [
-                    (k, v["title"], v["hint"], k == "company", False) for k, v in USE_CASE_PRESETS.items()
+                    (k, v["title"], v["hint"], k == preselect, False)
+                    for k, v in USE_CASE_PRESETS.items()
                 ]
                 sel_uc = run_menu(
                     "What kind of knowledge base is this?",
@@ -445,8 +563,10 @@ def run_init(
                     title="Brian setup",
                     single_select=True,
                 )
-                selected_use_case = sel_uc if sel_uc in USE_CASE_PRESETS else "company"
+                selected_use_case = sel_uc if sel_uc in USE_CASE_PRESETS else preselect
 
+            if not selected_use_case:
+                selected_use_case = "company"
             preset = USE_CASE_PRESETS[selected_use_case]
 
             default_org_name = (
@@ -464,7 +584,6 @@ def run_init(
                 or f"{raw_base_name} {preset['default_short_suffix']}"
             )
             if not short_name:
-                # Quiet default — power users can edit wiki.toml.
                 short_name = str(default_short)
 
             default_desc = (
@@ -485,33 +604,83 @@ def run_init(
                 else:
                     company_file_slug = default_slug
 
-            # --- Progressive disclosure: optional behavior customization ---
+            # --- Progressive disclosure: optional behavior multi-select ---
             if not rules_explicit:
-                want_customize = _prompt_yn(
-                    "│  Customize agent behavior now? (people tracking, assets, ADRs, …)",
+                want_customize = run_confirm(
+                    "Customize agent behavior now?",
                     default=False,
+                    title="Brian setup",
+                    confirm_label="choose optional behaviors",
+                    cancel_label="keep defaults",
                 )
                 if want_customize:
                     seed = existing_rules if existing_rules else list(preset["default_rules"])
                     parsed_rules = _select_rules_interactively(list(preset["default_rules"]), seed)
+                    rules_resolved = True  # empty multi-select is a deliberate "no extra rules"
                 else:
-                    parsed_rules = list(existing_rules) if existing_rules else list(preset["default_rules"])
+                    prior_uc = existing_use_case
+                    use_case_changed = bool(prior_uc) and prior_uc != selected_use_case
+                    if existing_rules and not use_case_changed:
+                        parsed_rules = list(existing_rules)
+                    else:
+                        parsed_rules = list(preset["default_rules"])
+                    rules_resolved = True
+
+            # Seed upkeep for optional customize step / summary.
+            upkeep_triggers_preview: list[str] = list(preset["triggers"])
+            upkeep_instructions_preview = str(preset["instructions"])
+            if existing_upkeep.get("triggers"):
+                raw_t = existing_upkeep["triggers"]
+                if isinstance(raw_t, list):
+                    upkeep_triggers_preview = [str(t) for t in raw_t]
+            if existing_upkeep.get("instructions"):
+                upkeep_instructions_preview = str(existing_upkeep["instructions"])
+
+            want_upkeep = run_confirm(
+                "Customize what agents offer to save? (triggers & instructions)",
+                default=False,
+                title="Brian setup",
+                confirm_label="edit triggers / instructions",
+                cancel_label="keep current",
+            )
+            if want_upkeep:
+                custom_upkeep = _customize_upkeep_interactively(
+                    selected_use_case,
+                    upkeep_triggers_preview,
+                    upkeep_instructions_preview,
+                )
+                upkeep_triggers_preview, upkeep_instructions_preview = custom_upkeep
 
             company_rel_path = _clean_company_rel_path(company_file_slug, default_slug)
             enabled_rule_labels = [ALL_AGENT_RULES[r]["label"] for r in parsed_rules if r in ALL_AGENT_RULES]
             rules_summary = ", ".join(enabled_rule_labels) if enabled_rule_labels else "None (sensible defaults)"
+            upkeep_summary = (
+                f"custom ({len(upkeep_triggers_preview)} triggers)"
+                if custom_upkeep is not None
+                or (
+                    existing_upkeep.get("triggers")
+                    and list(existing_upkeep.get("triggers") or []) != list(preset["triggers"])
+                )
+                or (
+                    existing_upkeep.get("instructions")
+                    and str(existing_upkeep.get("instructions", "")).strip()
+                    != str(preset["instructions"]).strip()
+                )
+                else f"preset ({selected_use_case})"
+            )
 
             print("│")
             print(f"│  {C_BOLD}About to write:{C_RESET}")
             print(f"│    • Use case: {C_CYAN}{preset['title']}{C_RESET}")
             print(f"│    • Name: {name}")
             print(f"│    • Agent rules: {C_CYAN}{rules_summary}{C_RESET}")
+            print(f"│    • Upkeep: {C_CYAN}{upkeep_summary}{C_RESET}")
             print(f"│    • Overview page: {company_rel_path}")
             print("│    • Files: wiki.toml, agent pointer, catalog indexes")
-            if toml_path.is_file():
+            if is_rerun:
                 print(
                     f"│  {C_YELLOW}Re-run:{C_RESET} updates wiki.toml; keeps your overview page "
-                    "and custom upkeep text."
+                    "and custom upkeep text unless you edited them above."
                 )
             print("│")
 
@@ -535,7 +704,7 @@ def run_init(
         selected_use_case = "company"
     preset = USE_CASE_PRESETS[selected_use_case]
 
-    if not parsed_rules:
+    if not rules_resolved:
         if rules_explicit:
             parsed_rules = []  # explicit empty list clears rules
         else:
@@ -563,25 +732,38 @@ def run_init(
         company_file_slug = Path(str(existing_paths["company_file"])).stem
     company_rel_path = _clean_company_rel_path(company_file_slug, default_slug)
 
-    # Prefer caller/preset triggers; preserve hand-edited upkeep on re-run.
-    upkeep_triggers = preset["triggers"]
-    upkeep_instructions = preset["instructions"]
-    if existing_upkeep.get("triggers"):
-        upkeep_triggers = existing_upkeep["triggers"]
-    if existing_upkeep.get("instructions"):
-        upkeep_instructions = str(existing_upkeep["instructions"])
+    # Prefer interactive customizations; else preserve hand-edited upkeep on re-run; else preset.
+    if custom_upkeep is not None:
+        upkeep_triggers, upkeep_instructions = custom_upkeep
+    else:
+        upkeep_triggers = list(preset["triggers"])
+        upkeep_instructions = str(preset["instructions"])
+        if existing_upkeep.get("triggers"):
+            raw_t = existing_upkeep["triggers"]
+            if isinstance(raw_t, list):
+                upkeep_triggers = [str(t) for t in raw_t]
+            elif isinstance(raw_t, str) and raw_t.strip():
+                upkeep_triggers = [raw_t.strip()]
+        if existing_upkeep.get("instructions"):
+            upkeep_instructions = str(existing_upkeep["instructions"])
 
-    triggers_toml = "[\n" + ",\n".join(f'    "{t}"' for t in upkeep_triggers) + "\n]"
+    # Escape quotes in trigger strings for TOML double-quoted items.
+    def _toml_str(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    triggers_toml = "[\n" + ",\n".join(f'    "{_toml_str(str(t))}"' for t in upkeep_triggers) + "\n]"
     rules_toml = _format_rules_toml(parsed_rules)
 
-    toml_content = f'''# wiki.toml - Brian Knowledge Base Engine Manifest
-# Edit freely. agent_rules = optional behaviors (see README → Customize).
-# Re-run `wiki init` anytime, or change values here and restart your agents.
+    toml_content = f'''# wiki.toml — edit freely in plain English.
+# agent_rules  = optional behaviors (see README → Customize)
+# [upkeep]     = when agents should offer to update the wiki
+# Re-run `wiki init` anytime to change settings interactively
+# (overview page & hand-edited upkeep text are preserved).
 
 [wiki]
-name = "{org_name}"
-short_name = "{org_short}"
-description = "{org_desc}"
+name = "{_toml_str(str(org_name))}"
+short_name = "{_toml_str(str(org_short))}"
+description = "{_toml_str(str(org_desc))}"
 version = "0.1.0"
 use_case = "{selected_use_case}"
 agent_rules = {rules_toml}
@@ -636,8 +818,8 @@ instructions = """
     print("│")
     print(f"└  {C_BOLD}Done.{C_RESET}  Preset: {preset['title']}")
     print()
-    print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  (agent_rules, name, upkeep)")
-    print(f"   Or re-run:     {C_CYAN}wiki init{C_RESET}")
+    print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  (agent_rules, name, [upkeep])")
+    print(f"   Or re-run:     {C_CYAN}wiki init{C_RESET}  (current values pre-selected)")
     print(f"   How to customize: README → {C_BOLD}Customize in plain English{C_RESET}")
     print()
     print(f"   {C_BOLD}Next:{C_RESET} {C_CYAN}wiki install{C_RESET}  → connect Claude, Cursor, Codex, Gemini, …")
