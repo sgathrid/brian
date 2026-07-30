@@ -936,7 +936,7 @@ def run_init(
             parsed_rules = []  # explicit empty list clears rules
         else:
             prior_use_case = str(existing_wiki.get("use_case") or "")
-            use_case_changed = bool(use_case) and prior_use_case and prior_use_case != selected_use_case
+            use_case_changed = bool(use_case and prior_use_case and prior_use_case != selected_use_case)
             if existing_rules and not use_case_changed:
                 # Re-run keeps prior rules unless the preset itself changed.
                 parsed_rules = existing_rules

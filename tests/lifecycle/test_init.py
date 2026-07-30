@@ -602,7 +602,7 @@ def test_run_init_use_case_change_keeps_custom_upkeep(tmp_path: Path):
     data["upkeep"]["triggers"] = triggers
     # Serialize minimally via run path: rewrite TOML triggers block from current file.
     raw = toml_path.read_text(encoding="utf-8")
-    old_first = list(tomllib.loads(raw)["upkeep"]["triggers"])[0]
+    old_first = next(iter(tomllib.loads(raw)["upkeep"]["triggers"]))
     raw = raw.replace(old_first, "CUSTOM_KEEP_TRIGGER", 1)
     toml_path.write_text(raw, encoding="utf-8")
 
@@ -617,4 +617,3 @@ def test_run_init_use_case_change_keeps_custom_upkeep(tmp_path: Path):
         after = tomllib.load(f)
     assert after["wiki"]["use_case"] == "engineering"
     assert after["upkeep"]["triggers"][0] == "CUSTOM_KEEP_TRIGGER"
-
