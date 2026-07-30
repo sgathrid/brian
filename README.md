@@ -130,7 +130,8 @@ The installer detects what’s on your machine and hooks your configured knowled
 │
 │  Which agent integrations do you want to configure?
 │
-│ ❯ ○ Claude Code (detected)
+│ ❯ ○ Claude Desktop (detected)
+|   ○ Claude Code (detected)
 │   ○ Codex CLI (detected)
 │   ● Gemini CLI (✓ active)
 │   ○ GitHub Copilot CLI (detected)
