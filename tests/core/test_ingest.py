@@ -9,6 +9,7 @@ import pytest
 from wikicli.core import ingest
 from wikicli.core.generate import generate_backlinks, generate_index, generate_registry, generate_tags
 from wikicli.core.ingest import (
+    KnowledgeUpdateRequest,
     PageChange,
     RetrievalCase,
     check_ingestion,
@@ -96,11 +97,48 @@ def _valid_repo(tmp_path: Path) -> Path:
     return root
 
 
+def _run_update(
+    root: Path,
+    *,
+    source_title: str,
+    source_content: str | None,
+    existing_source_path: str | None,
+    source_type: str,
+    page_changes: list[PageChange],
+    retrieval_cases: list[RetrievalCase],
+    apply: bool,
+    approval_digest: str | None = None,
+):
+    request = KnowledgeUpdateRequest(
+        source_title=source_title,
+        source_content=source_content,
+        existing_source_path=existing_source_path,
+        source_type=source_type,
+        page_changes=page_changes,
+        retrieval_cases=retrieval_cases,
+        approval_digest=approval_digest,
+    )
+    return update_knowledge(root, request, apply=apply)
+
+
 def test_valid_ingestion_proves_sources_became_connected_knowledge(tmp_path: Path):
     report = check_ingestion(_valid_repo(tmp_path), base=None)
 
     assert report.ok, report.errors
     assert "2 knowledge pages; 2 registered sources" in report.facts
+    assert any("cold-start hit@1 100.0%" in fact for fact in report.facts)
+
+
+def test_retrieval_gate_accepts_any_highest_grade_target(tmp_path: Path):
+    root = _valid_repo(tmp_path)
+    cases_path = root / "benchmarks/cold_start_cases.json"
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    cases[1]["relevance"] = {"alpha": 3, "source-synthesis": 3}
+    cases_path.write_text(json.dumps(cases), encoding="utf-8")
+
+    report = check_ingestion(root, base=None)
+
+    assert report.ok, report.errors
     assert any("cold-start hit@1 100.0%" in fact for fact in report.facts)
 
 
@@ -200,7 +238,7 @@ def test_retrieval_misses_explain_failed_global_hit_at_three_floor(tmp_path: Pat
     assert sum(item.code == "RETRIEVAL_MISS" for item in report.diagnostics) == 9
 
 
-def _knowledge_update(root: Path, source_content: str, confirmed: bool, approval_digest: str | None = None):
+def _knowledge_update(root: Path, source_content: str, apply: bool, approval_digest: str | None = None):
     source_placeholder = "{{SOURCE_PATH}}"
     alpha = (
         (root / "wiki/entities/alpha.md")
@@ -227,7 +265,7 @@ Beta retains headings, Unicode, and exact source material while linking to [[Alp
 
 Compiled from `{source_placeholder}`.
 """
-    return update_knowledge(
+    return _run_update(
         root,
         source_title="Complex context",
         source_content=source_content,
@@ -240,34 +278,107 @@ Compiled from `{source_placeholder}`.
             PageChange("wiki/concepts/beta.md", beta),
         ],
         retrieval_cases=[RetrievalCase("where is the complex nuanced source", {"beta": 3})],
-        confirmed=confirmed,
+        apply=apply,
         approval_digest=approval_digest,
     )
 
 
 def _preview_and_apply(root: Path, source_content: str):
-    preview = _knowledge_update(root, source_content, confirmed=False)
-    return _knowledge_update(root, source_content, confirmed=True, approval_digest=preview.approval_digest)
+    preview = _knowledge_update(root, source_content, apply=False)
+    return _knowledge_update(root, source_content, apply=True, approval_digest=preview.approval_digest)
 
 
 def test_knowledge_update_preview_is_lossless_and_does_not_write(tmp_path: Path):
     root = _valid_repo(tmp_path)
     source = "# Exact heading\n\nUnicode: naïve → β\n\n```sql\nselect  *  from x;\n```\nNo trailing newline"
 
-    result = _knowledge_update(root, source, confirmed=False)
+    result = _knowledge_update(root, source, apply=False)
 
     assert result.status == "ready"
     assert not (root / result.source_path).exists()
     assert not (root / "wiki/concepts/beta.md").exists()
 
 
+def test_knowledge_update_preview_reports_concise_page_deltas(tmp_path: Path):
+    root = _valid_repo(tmp_path)
+
+    result = _knowledge_update(root, "Preview delta source", apply=False)
+
+    assert result.created_pages == ["wiki/concepts/beta.md"]
+    assert result.updated_pages == ["wiki/entities/alpha.md"]
+    assert result.metadata_changes == {}
+    assert result.links_added == {
+        "wiki/concepts/beta.md": ["Alpha"],
+        "wiki/entities/alpha.md": ["Beta"],
+    }
+    assert result.links_removed == {}
+
+
+def test_knowledge_update_preview_reports_only_worsened_judged_query_ranks(tmp_path: Path):
+    root = _valid_repo(tmp_path)
+    cases_path = root / "benchmarks/cold_start_cases.json"
+    cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    cases[0]["query"] = "primary company entity"
+    cases_path.write_text(json.dumps(cases), encoding="utf-8")
+    alpha = (
+        (root / "wiki/entities/alpha.md")
+        .read_text(encoding="utf-8")
+        .replace("title: Alpha", "title: Primary Company")
+        .replace("summary: Primary company entity.", "summary: Organization overview.")
+        .replace("# Alpha", "# Primary Company")
+        .replace("See [[Source Synthesis]].", "See [[Source Synthesis]] and [[Primary Company Entity Guide]].")
+    )
+    guide = """---
+title: Primary Company Entity Guide
+type: concept
+scope: company
+summary: Guide for primary company entity questions.
+tags: [company]
+aliases: [entity overview]
+context_keys: [company entity guide]
+updated: 2026-07-30
+verified: false
+---
+
+# Primary Company Entity Guide
+
+The guide links to [[Primary Company]].
+
+## Provenance and status
+
+Compiled from `{{SOURCE_PATH}}`.
+"""
+
+    result = _run_update(
+        root,
+        source_title="Ranking change",
+        source_content="ranking source",
+        existing_source_path=None,
+        source_type="conversation",
+        page_changes=[
+            PageChange("wiki/entities/alpha.md", alpha),
+            PageChange("wiki/concepts/alpha-guide.md", guide),
+        ],
+        retrieval_cases=[RetrievalCase("where is the company entity guide", {"alpha-guide": 3})],
+        apply=False,
+    )
+
+    assert result.status == "ready", result.diagnostics
+    assert [item.query for item in result.retrieval_regressions] == ["primary company entity"]
+    regression = result.retrieval_regressions[0]
+    assert regression.targets == ["alpha"]
+    assert regression.before_rank == 1
+    assert regression.after_rank == 2
+    assert result.metadata_changes["wiki/entities/alpha.md"] == ["summary", "title"]
+
+
 def test_knowledge_update_requires_the_exact_preview_digest(tmp_path: Path):
     root = _valid_repo(tmp_path)
     source = "Approval-bound source"
-    preview = _knowledge_update(root, source, confirmed=False)
+    preview = _knowledge_update(root, source, apply=False)
 
     with pytest.raises(ValueError, match="approval digest"):
-        _knowledge_update(root, source, confirmed=True)
+        _knowledge_update(root, source, apply=True)
 
     changed = (
         (root / "wiki/entities/alpha.md")
@@ -276,7 +387,7 @@ def test_knowledge_update_requires_the_exact_preview_digest(tmp_path: Path):
     )
     (root / "wiki/entities/alpha.md").write_text(changed, encoding="utf-8")
     with pytest.raises(ValueError, match="stale"):
-        _knowledge_update(root, source, confirmed=True, approval_digest=preview.approval_digest)
+        _knowledge_update(root, source, apply=True, approval_digest=preview.approval_digest)
 
 
 def test_knowledge_update_applies_complete_validated_graph_and_preserves_source(tmp_path: Path):
@@ -295,7 +406,7 @@ def test_invalid_knowledge_update_leaves_repository_unchanged(tmp_path: Path):
     root = _valid_repo(tmp_path)
     registry_before = (root / "wiki/sources.json").read_bytes()
 
-    result = update_knowledge(
+    result = _run_update(
         root,
         source_title="Broken context",
         source_content="Exact source",
@@ -303,7 +414,7 @@ def test_invalid_knowledge_update_leaves_repository_unchanged(tmp_path: Path):
         source_type="conversation",
         page_changes=[PageChange("wiki/concepts/broken-update.md", "# Missing required structure")],
         retrieval_cases=[RetrievalCase("broken update", {"broken-update": 3})],
-        confirmed=False,
+        apply=False,
     )
 
     assert result.status == "needs_revision"
@@ -321,7 +432,7 @@ def test_knowledge_update_can_reference_existing_raw_source_without_copying(tmp_
         .replace("See [[Source Synthesis]].", "See [[Source Synthesis]].")
     )
 
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Existing alpha source",
         source_content=None,
@@ -329,9 +440,9 @@ def test_knowledge_update_can_reference_existing_raw_source_without_copying(tmp_
         source_type="existing file",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=False,
+        apply=False,
     )
-    result = update_knowledge(
+    result = _run_update(
         root,
         source_title="Existing alpha source",
         source_content=None,
@@ -339,13 +450,75 @@ def test_knowledge_update_can_reference_existing_raw_source_without_copying(tmp_
         source_type="existing file",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=True,
+        apply=True,
         approval_digest=preview.approval_digest,
     )
 
     assert result.source_path == "raw/one.md"
     assert (root / "raw/one.md").read_text(encoding="utf-8") == "alpha source"
     assert check_ingestion(root, base=None).ok
+
+
+def test_update_reconciles_changed_page_mappings_from_all_provenance_sources(tmp_path: Path):
+    root = _valid_repo(tmp_path)
+    alpha = (root / "wiki/entities/alpha.md").read_text(encoding="utf-8").replace("raw/one.md", "raw/two.md")
+
+    preview = _run_update(
+        root,
+        source_title="Second source",
+        source_content=None,
+        existing_source_path="raw/two.md",
+        source_type="existing file",
+        page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
+        retrieval_cases=[],
+        apply=False,
+    )
+    assert preview.status == "ready", preview.diagnostics
+
+    applied = _run_update(
+        root,
+        source_title="Second source",
+        source_content=None,
+        existing_source_path="raw/two.md",
+        source_type="existing file",
+        page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
+        retrieval_cases=[],
+        apply=True,
+        approval_digest=preview.approval_digest,
+    )
+
+    assert applied.status == "applied"
+    registry = json.loads((root / "wiki/sources.json").read_text(encoding="utf-8"))["sources"]
+    assert registry["raw/one.md"]["pages"] == ["wiki/syntheses/source-synthesis.md"]
+    assert registry["raw/two.md"]["pages"] == [
+        "wiki/entities/alpha.md",
+        "wiki/syntheses/source-synthesis.md",
+    ]
+
+
+def test_update_rejects_provenance_citation_to_unknown_source(tmp_path: Path):
+    root = _valid_repo(tmp_path)
+    alpha = (
+        (root / "wiki/entities/alpha.md")
+        .read_text(encoding="utf-8")
+        .replace("`raw/one.md`", "`raw/one.md` and `raw/missing.md`")
+    )
+
+    result = _run_update(
+        root,
+        source_title="Existing alpha source",
+        source_content=None,
+        existing_source_path="raw/one.md",
+        source_type="existing file",
+        page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
+        retrieval_cases=[],
+        apply=False,
+    )
+
+    assert result.status == "needs_revision"
+    assert any(
+        "raw/missing.md: cited by a page but absent from sources.json" in item.message for item in result.diagnostics
+    )
 
 
 def test_knowledge_update_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -397,11 +570,11 @@ def test_knowledge_update_rolls_back_if_apply_fails(tmp_path: Path, monkeypatch:
             raise OSError("simulated write failure")
         real_atomic_write(path, content)
 
-    preview = _knowledge_update(root, "Rollback source", confirmed=False)
+    preview = _knowledge_update(root, "Rollback source", apply=False)
     monkeypatch.setattr(ingest, "_atomic_write", fail_once)
 
     with pytest.raises(OSError, match="simulated write failure"):
-        _knowledge_update(root, "Rollback source", confirmed=True, approval_digest=preview.approval_digest)
+        _knowledge_update(root, "Rollback source", apply=True, approval_digest=preview.approval_digest)
 
     assert not (root / "wiki/concepts/beta.md").exists()
     assert not (root / "raw/inbox").exists()
@@ -413,7 +586,7 @@ def test_update_reuses_exact_existing_raw_content(tmp_path: Path):
     source = (root / "raw/one.md").read_text(encoding="utf-8")
     alpha = (root / "wiki/entities/alpha.md").read_text(encoding="utf-8")
 
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Alpha source again",
         source_content=source,
@@ -421,7 +594,7 @@ def test_update_reuses_exact_existing_raw_content(tmp_path: Path):
         source_type="conversation",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=False,
+        apply=False,
     )
 
     assert preview.status == "ready"
@@ -435,7 +608,7 @@ def test_exact_source_reuse_and_inspection_hash_original_bytes(tmp_path: Path):
     (root / "raw/one.md").write_bytes(raw_bytes)
     alpha = (root / "wiki/entities/alpha.md").read_text(encoding="utf-8")
 
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Different newline bytes",
         source_content="alpha\nsource",
@@ -443,7 +616,7 @@ def test_exact_source_reuse_and_inspection_hash_original_bytes(tmp_path: Path):
         source_type="conversation",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=False,
+        apply=False,
     )
 
     assert preview.status == "ready"
@@ -505,7 +678,7 @@ Beta retains headings, Unicode, and exact source material while linking to [[Alp
 
 Compiled from `{{SOURCE_PATH}}`.
 """
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Path keys",
         source_content=source,
@@ -518,7 +691,7 @@ Compiled from `{{SOURCE_PATH}}`.
         retrieval_cases=[
             RetrievalCase("where is the complex nuanced source", {"entities/beta": 3, "wiki://page/concepts/beta": 2})
         ],
-        confirmed=False,
+        apply=False,
     )
     assert preview.status == "ready", preview.diagnostics
 
@@ -551,7 +724,7 @@ Beta links to [[Alpha]].
 
 Needs a citation from the engine.
 """
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Provenance repair",
         source_content=source,
@@ -562,10 +735,10 @@ Needs a citation from the engine.
             PageChange("wiki/concepts/beta.md", beta),
         ],
         retrieval_cases=[RetrievalCase("where is the complex nuanced source", {"beta": 3})],
-        confirmed=False,
+        apply=False,
     )
     assert preview.status == "ready", preview.diagnostics
-    applied = update_knowledge(
+    applied = _run_update(
         root,
         source_title="Provenance repair",
         source_content=source,
@@ -576,7 +749,7 @@ Needs a citation from the engine.
             PageChange("wiki/concepts/beta.md", beta),
         ],
         retrieval_cases=[RetrievalCase("where is the complex nuanced source", {"beta": 3})],
-        confirmed=True,
+        apply=True,
         approval_digest=preview.approval_digest,
     )
     assert applied.status == "applied"
@@ -595,7 +768,7 @@ def test_update_renders_source_citation_inside_provenance_section(tmp_path: Path
         )
     )
 
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Section-scoped provenance",
         source_content="section-scoped evidence",
@@ -603,11 +776,11 @@ def test_update_renders_source_citation_inside_provenance_section(tmp_path: Path
         source_type="conversation",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=False,
+        apply=False,
     )
     assert preview.status == "ready", preview.diagnostics
 
-    applied = update_knowledge(
+    applied = _run_update(
         root,
         source_title="Section-scoped provenance",
         source_content="section-scoped evidence",
@@ -615,7 +788,7 @@ def test_update_renders_source_citation_inside_provenance_section(tmp_path: Path
         source_type="conversation",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[],
-        confirmed=True,
+        apply=True,
         approval_digest=preview.approval_digest,
     )
     body = (root / "wiki/entities/alpha.md").read_text(encoding="utf-8")
@@ -631,7 +804,7 @@ def test_transaction_retrieval_miss_blocks_even_above_global_floor(tmp_path: Pat
     cases_path.write_text(json.dumps(cases), encoding="utf-8")
     alpha = (root / "wiki/entities/alpha.md").read_text(encoding="utf-8")
 
-    result = update_knowledge(
+    result = _run_update(
         root,
         source_title="Bad transaction query",
         source_content="transaction retrieval evidence",
@@ -639,7 +812,7 @@ def test_transaction_retrieval_miss_blocks_even_above_global_floor(tmp_path: Pat
         source_type="conversation",
         page_changes=[PageChange("wiki/entities/alpha.md", alpha)],
         retrieval_cases=[RetrievalCase("office parking badge replacement policy", {"alpha": 3})],
-        confirmed=False,
+        apply=False,
     )
 
     assert result.status == "needs_revision"
@@ -678,7 +851,7 @@ Beta links to [[Alpha]].
 
 Compiled from `{{SOURCE_PATH}}`.
 """
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="Debt tolerant",
         source_content=source,
@@ -689,7 +862,7 @@ Compiled from `{{SOURCE_PATH}}`.
             PageChange("wiki/concepts/beta.md", beta),
         ],
         retrieval_cases=[RetrievalCase("where is the complex nuanced source", {"beta": 3})],
-        confirmed=False,
+        apply=False,
     )
     assert preview.status == "ready", preview.diagnostics
     assert any("repository debt" in item for item in preview.debt)
@@ -724,7 +897,7 @@ Corporate terms for [[Alpha]].
 
 Compiled from `{{SOURCE_PATH}}`.
 """
-    preview = update_knowledge(
+    preview = _run_update(
         root,
         source_title="WilmerHale letter",
         source_content=None,
@@ -738,10 +911,10 @@ Compiled from `{{SOURCE_PATH}}`.
             PageChange("wiki/entities/corporate.md", corporate),
         ],
         retrieval_cases=[RetrievalCase("what is the QuickLaunch fee deferral", {"corporate": 3})],
-        confirmed=False,
+        apply=False,
     )
     assert preview.status == "ready", preview.diagnostics
-    applied = update_knowledge(
+    applied = _run_update(
         root,
         source_title="WilmerHale letter",
         source_content=None,
@@ -755,7 +928,7 @@ Compiled from `{{SOURCE_PATH}}`.
             PageChange("wiki/entities/corporate.md", corporate),
         ],
         retrieval_cases=[RetrievalCase("what is the QuickLaunch fee deferral", {"corporate": 3})],
-        confirmed=True,
+        apply=True,
         approval_digest=preview.approval_digest,
     )
     assert applied.status == "applied"
@@ -785,7 +958,7 @@ No links here.
 
 Compiled from `{{SOURCE_PATH}}`.
 """
-    result = update_knowledge(
+    result = _run_update(
         root,
         source_title="Orphan",
         source_content="orphan source",
@@ -793,7 +966,7 @@ Compiled from `{{SOURCE_PATH}}`.
         source_type="conversation",
         page_changes=[PageChange("wiki/concepts/orphan-concept.md", orphan)],
         retrieval_cases=[RetrievalCase("lonely concept", {"orphan-concept": 3})],
-        confirmed=False,
+        apply=False,
     )
     assert result.status == "needs_revision"
     codes = {item.code for item in result.diagnostics}
