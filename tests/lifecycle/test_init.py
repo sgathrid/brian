@@ -265,6 +265,18 @@ def test_customize_upkeep_interactively_edits_both(monkeypatch):
     assert out_i == "Offer updates only when asked."
 
 
+def _fake_init_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+    """Interactive init uses single-select for use-case and proactivity."""
+    if single_select:
+        ids = [o[0] for o in (options or [])]
+        if "selective" in ids:
+            return "selective"
+        if "company" in ids:
+            return "company"
+        return ids[0] if ids else ""
+    return "adrs strict_sources"
+
+
 def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatch):
     """Interactive path: multi-select rules + custom upkeep write through to wiki.toml."""
     from wikicli.lifecycle import init as init_mod
@@ -272,16 +284,10 @@ def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatc
     (tmp_path / "wiki").mkdir()
 
     # Sequence of run_confirm: customize rules? Y, customize upkeep? Y, keep triggers? N,
-    # edit instructions? Y, save? Y
+    # edit instructions? Y, save? Y  (proactivity is a menu, not confirm)
     confirm_answers = iter([True, True, False, True, True])
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
-
-    def fake_menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
-        if single_select:
-            return "company"
-        return "adrs strict_sources"
-
-    monkeypatch.setattr(init_mod, "run_menu", fake_menu)
+    monkeypatch.setattr(init_mod, "run_menu", _fake_init_menu)
     monkeypatch.setattr(init_mod, "_prompt", lambda text, default: "Interactive Co")
     monkeypatch.setattr(
         init_mod,
@@ -304,12 +310,17 @@ def test_run_init_interactive_custom_upkeep_and_rules(tmp_path: Path, monkeypatc
     assert data["wiki"]["name"] == "Interactive Co"
     assert data["wiki"]["use_case"] == "company"
     assert data["wiki"]["agent_rules"] == ["adrs", "strict_sources"]
+    assert data["upkeep"]["proactivity"] == "selective"
     assert data["upkeep"]["triggers"] == ["Ship a user-facing change", "Update a policy doc"]
     assert "Ask before writing" in data["upkeep"]["instructions"]
 
     toml_text = (tmp_path / "wiki.toml").read_text(encoding="utf-8")
     assert "edit freely in plain English" in toml_text
     assert "[upkeep]" in toml_text
+
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert "Ship a user-facing change" in pointer
+    assert "Ask before writing" in pointer
 
 
 def test_run_init_interactive_rerun_preserves_upkeep_when_skipped(tmp_path: Path, monkeypatch):
@@ -334,16 +345,124 @@ def test_run_init_interactive_rerun_preserves_upkeep_when_skipped(tmp_path: Path
     # customize rules? N, customize upkeep? N, save? Y
     confirm_answers = iter([False, False, True])
     monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
-    monkeypatch.setattr(
-        init_mod,
-        "run_menu",
-        lambda prompt, options=None, title="Brian setup", non_interactive=False, single_select=False: "company",
-    )
+    monkeypatch.setattr(init_mod, "run_menu", _fake_init_menu)
     monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
     monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
 
     assert run_init(tmp_path, non_interactive=False) is True
     assert "KEEP_ME_ON_RERUN" in toml_path.read_text(encoding="utf-8")
+
+
+def test_run_init_writes_proactivity_and_pointer_upkeep(tmp_path: Path):
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Posture Co",
+        short_name="PC",
+        company_file_slug="posture-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        data = tomllib.load(f)
+    assert data["upkeep"]["proactivity"] == "selective"
+    assert data["upkeep"]["triggers"]
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert "Keeping it current" in pointer
+    assert str(data["upkeep"]["triggers"][0]) in pointer
+    assert "Proactivity:" in pointer or "selective" in pointer
+
+
+def test_run_init_posture_change_rewrites_upkeep(tmp_path: Path, monkeypatch):
+    """Changing proactivity must replace triggers/instructions, not only the label."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Posture Flip Co",
+        company_file_slug="posture-flip",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        before = tomllib.load(f)
+    old_first = before["upkeep"]["triggers"][0]
+    capture_first = init_mod.UPKEEP_POSTURES["capture"]["triggers"][0]
+    assert old_first != capture_first
+
+    # capture/active/silent skip the fine-tune step — only rules? + save?
+    confirm_answers = iter([False, True])  # rules N, save Y
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+
+    def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        if single_select:
+            ids = [o[0] for o in (options or [])]
+            if "capture" in ids:
+                return "capture"
+            if "company" in ids:
+                return "company"
+            return ids[0] if ids else ""
+        return ""
+
+    monkeypatch.setattr(init_mod, "run_menu", menu)
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    assert run_init(tmp_path, non_interactive=False) is True
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        after = tomllib.load(f)
+    assert after["upkeep"]["proactivity"] == "capture"
+    assert after["upkeep"]["triggers"] == list(init_mod.UPKEEP_POSTURES["capture"]["triggers"])
+    assert old_first not in after["upkeep"]["triggers"]
+    pointer = (tmp_path / "_templates" / "agent-pointer.md").read_text(encoding="utf-8")
+    assert capture_first in pointer
+    assert "prefer logging" in pointer
+
+
+def test_run_init_legacy_manifest_applies_new_posture(tmp_path: Path, monkeypatch):
+    """Pre-proactivity wiki.toml treated as selective; picking active rewrites packs."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        name="Legacy Co",
+        company_file_slug="legacy-overview",
+        non_interactive=True,
+    )
+    toml_path = tmp_path / "wiki.toml"
+    text = toml_path.read_text(encoding="utf-8")
+    text = text.replace('proactivity = "selective"\n', "")
+    toml_path.write_text(text, encoding="utf-8")
+    with open(toml_path, "rb") as f:
+        legacy = tomllib.load(f)
+    assert "proactivity" not in legacy.get("upkeep", {})
+    old_first = legacy["upkeep"]["triggers"][0]
+    active_first = init_mod.UPKEEP_POSTURES["active"]["triggers"][0]
+
+    # active posture skips fine-tune — only rules? + save?
+    confirm_answers = iter([False, True])
+    monkeypatch.setattr(init_mod, "run_confirm", lambda *a, **k: next(confirm_answers))
+
+    def menu(prompt, options=None, title="Brian setup", non_interactive=False, single_select=False):
+        if single_select:
+            ids = [o[0] for o in (options or [])]
+            if "active" in ids:
+                return "active"
+            if "company" in ids:
+                return "company"
+            return ids[0] if ids else ""
+        return ""
+
+    monkeypatch.setattr(init_mod, "run_menu", menu)
+    monkeypatch.setattr(init_mod, "_prompt", lambda text, default: default)
+    monkeypatch.setattr(init_mod.sys.stdin, "isatty", lambda: True)
+
+    assert run_init(tmp_path, non_interactive=False) is True
+    with open(toml_path, "rb") as f:
+        after = tomllib.load(f)
+    assert after["upkeep"]["proactivity"] == "active"
+    assert after["upkeep"]["triggers"][0] == active_first
+    assert old_first not in after["upkeep"]["triggers"]
 
 
 def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
@@ -371,3 +490,131 @@ def test_agent_rules_flow_into_session_start_hook(tmp_path: Path, monkeypatch):
     assert "Active agent rules" in ctx
     assert "People & Team Directory" in ctx
     assert "Security & Secrets Policy" in ctx
+    assert "Person page shape" in ctx
+    assert "## Keeping it current" in ctx
+    assert cfg.upkeep_triggers
+    assert cfg.upkeep_triggers[0] in ctx
+    assert "never commit" in ctx.lower() or "Never commit" in ctx
+
+def test_resolve_upkeep_refreshes_stock_on_use_case_change():
+    """Company stock + selective → engineering applies engineering pack."""
+    from wikicli.lifecycle import init as init_mod
+
+    company = init_mod._upkeep_for_posture("company", "selective")
+    engineering = init_mod._upkeep_for_posture("engineering", "selective")
+    assert company != engineering
+
+    existing = {
+        "proactivity": "selective",
+        "triggers": list(company[0]),
+        "instructions": company[1],
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "engineering", "selective", None, prior_use_case="company"
+    )
+    assert got == engineering
+
+
+def test_resolve_upkeep_preserves_custom_on_use_case_change():
+    """Hand-edited selective text survives use-case switch."""
+    from wikicli.lifecycle import init as init_mod
+
+    custom_t = ["My custom trigger that is not stock"]
+    custom_i = "My custom instructions."
+    existing = {
+        "proactivity": "selective",
+        "triggers": custom_t,
+        "instructions": custom_i,
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "engineering", "selective", None, prior_use_case="company"
+    )
+    assert got == (custom_t, custom_i)
+
+
+def test_resolve_upkeep_same_use_case_preserves_stock():
+    """Re-run same use case keeps stock text (no spurious rewrite)."""
+    from wikicli.lifecycle import init as init_mod
+
+    company = init_mod._upkeep_for_posture("company", "selective")
+    existing = {
+        "proactivity": "selective",
+        "triggers": list(company[0]),
+        "instructions": company[1],
+    }
+    got = init_mod._resolve_upkeep(
+        existing, "company", "selective", None, prior_use_case="company"
+    )
+    assert got == company
+
+
+def test_run_init_use_case_change_refreshes_selective_stock(tmp_path: Path):
+    """Non-interactive company → engineering swaps selective stock packs."""
+    from wikicli.lifecycle import init as init_mod
+
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        use_case="company",
+        name="Swap Co",
+        company_file_slug="swap-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        before = tomllib.load(f)
+    assert before["wiki"]["use_case"] == "company"
+    company_first = before["upkeep"]["triggers"][0]
+    eng_first = init_mod._upkeep_for_posture("engineering", "selective")[0][0]
+    assert company_first != eng_first
+
+    assert run_init(
+        tmp_path,
+        use_case="engineering",
+        name="Swap Co",
+        company_file_slug="swap-overview",
+        non_interactive=True,
+    )
+    with open(tmp_path / "wiki.toml", "rb") as f:
+        after = tomllib.load(f)
+    assert after["wiki"]["use_case"] == "engineering"
+    assert after["upkeep"]["proactivity"] == "selective"
+    assert after["upkeep"]["triggers"][0] == eng_first
+    assert company_first not in after["upkeep"]["triggers"]
+    assert "adrs" in after["wiki"]["agent_rules"]
+
+
+def test_run_init_use_case_change_keeps_custom_upkeep(tmp_path: Path):
+    """Custom selective text is not wiped when use case changes."""
+    (tmp_path / "wiki").mkdir()
+    assert run_init(
+        tmp_path,
+        use_case="company",
+        name="Custom Keep Co",
+        company_file_slug="custom-keep",
+        non_interactive=True,
+    )
+    toml_path = tmp_path / "wiki.toml"
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    # Rewrite with a clearly non-stock first trigger while keeping selective posture.
+    triggers = list(data["upkeep"]["triggers"])
+    triggers[0] = "CUSTOM_KEEP_TRIGGER"
+    data["upkeep"]["triggers"] = triggers
+    # Serialize minimally via run path: rewrite TOML triggers block from current file.
+    raw = toml_path.read_text(encoding="utf-8")
+    old_first = list(tomllib.loads(raw)["upkeep"]["triggers"])[0]
+    raw = raw.replace(old_first, "CUSTOM_KEEP_TRIGGER", 1)
+    toml_path.write_text(raw, encoding="utf-8")
+
+    assert run_init(
+        tmp_path,
+        use_case="engineering",
+        name="Custom Keep Co",
+        company_file_slug="custom-keep",
+        non_interactive=True,
+    )
+    with open(toml_path, "rb") as f:
+        after = tomllib.load(f)
+    assert after["wiki"]["use_case"] == "engineering"
+    assert after["upkeep"]["triggers"][0] == "CUSTOM_KEEP_TRIGGER"
+

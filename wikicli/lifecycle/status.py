@@ -5,7 +5,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from ..core.config import WikiConfig
+from .brief import PROACTIVITY_LABELS
 from .integrations import AGENT_REGISTRY, SUPPORTED_AGENTS, integration_state
+from .personalization import load_agent_rule_catalog
 from .sync import get_sync_status
 
 C_RESET = "\033[0m"
@@ -26,13 +29,56 @@ AGENT_STATUS = {
 }
 
 
+def _agent_behavior_lines(repo_root: Path) -> list[str]:
+    """Short 'what agents will do' card from wiki.toml.
+
+    Mirrors session-start honesty: only catalog-resolved rules count as active,
+    and proactivity is shown as a brief label (not a silent rewrite of triggers).
+    """
+    cfg = WikiConfig(repo_root)
+    key = (cfg.upkeep_proactivity or "").strip().lower()
+    if key in PROACTIVITY_LABELS:
+        proactivity_display = PROACTIVITY_LABELS[key]
+    elif key:
+        proactivity_display = f"{key} (unknown — ignored at session start)"
+    else:
+        proactivity_display = "(unset)"
+
+    n_triggers = len([t for t in cfg.upkeep_triggers if str(t).strip()])
+
+    if not cfg.agent_rules:
+        rules = "none"
+    else:
+        catalog = load_agent_rule_catalog()
+        if not catalog:
+            # Same gate as format_rules_block: empty catalog ⇒ nothing injected.
+            rules = "unavailable (no catalog)"
+        else:
+            labels: list[str] = []
+            for rid in cfg.agent_rules:
+                meta = catalog.get(rid) if isinstance(catalog, dict) else None
+                if isinstance(meta, dict) and isinstance(meta.get("label"), str) and meta["label"].strip():
+                    labels.append(meta["label"].strip())
+            rules = ", ".join(labels) if labels else "none"
+
+    return [
+        "What agents will do",
+        f"    proactivity: {proactivity_display}",
+        f"    {C_DIM}label only — session behavior = triggers + instructions{C_RESET}",
+        f"    rules: {rules}",
+        f"    triggers: {n_triggers}",
+    ]
+
+
 def run_status(repo_root: Path) -> None:
     """Report the shared CLI separately and count only active agent integrations."""
     home = Path.home()
     local_bin = home / ".local" / "bin" / "wiki"
     source_wiki = repo_root / "bin" / "wiki"
+    cfg = WikiConfig(repo_root)
+    title = f"{cfg.short_name} Agent Status"
 
-    print(f"┌  {C_BOLD}Brian Wiki Agent Status{C_RESET}")
+    print(f"┌  {C_BOLD}{title}{C_RESET}")
     print("│")
     print(f"│  repo: {repo_root}")
     print("│")
@@ -44,6 +90,9 @@ def run_status(repo_root: Path) -> None:
     marker = S_CHECK_GREEN if sync.fresh is True else S_TRIANGLE_ORANGE
     print("│  Knowledge Freshness")
     print(f"│    {marker} {sync.detail}{age}")
+    print("│")
+    for line in _agent_behavior_lines(repo_root):
+        print(f"│  {line}" if not line.startswith("  ") else f"│{line}")
     print("│")
     print("│  CLI Binary on PATH")
     if local_bin.is_symlink() and local_bin.resolve() == source_wiki.resolve():

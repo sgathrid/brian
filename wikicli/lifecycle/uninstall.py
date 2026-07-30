@@ -68,10 +68,7 @@ def _remove_json_wiki_hooks(settings_path: Path, dry_run: bool) -> int:
 
 
 def _remove_owned_json_settings(
-    path: Path,
-    owned: dict[str, list[str]],
-    settings: dict[str, tuple[str, ...]],
-    dry_run: bool,
+    path: Path, owned: dict[str, list[str]], settings: dict[str, tuple[str, ...]], dry_run: bool
 ) -> bool:
     if not owned or not path.is_file():
         return False
@@ -97,9 +94,7 @@ def _remove_repo_links(paths: list[Path], repo_root: Path, dry_run: bool) -> int
     return len(owned)
 
 
-def _remove_created_file_if_empty(
-    path: Path, owned: dict[str, list[str]], dry_run: bool
-) -> None:
+def _remove_created_file_if_empty(path: Path, owned: dict[str, list[str]], dry_run: bool) -> None:
     """Remove a now-empty config only when this installer created the file."""
     if dry_run or str(path) not in owned.get("createdFiles", []) or not path.is_file():
         return
@@ -138,9 +133,7 @@ def run_uninstall(
     elif targets:
         selected_targets = [t.lower() for t in targets if t.lower() in SUPPORTED_AGENTS]
     elif non_interactive:
-        selected_targets = [
-            a for a in SUPPORTED_AGENTS if _is_agent_installed(a, home, repo_root)
-        ]
+        selected_targets = [a for a in SUPPORTED_AGENTS if _is_agent_installed(a, home, repo_root)]
     else:
         # Interactive TTY menu selection — pre-select only active or stale integrations
         options = []
@@ -155,9 +148,7 @@ def run_uninstall(
                 hint = "not configured"
             options.append((agent, name, hint, state != "absent"))
 
-        sel_str = run_menu(
-            "Which agent integrations do you want to uninstall?", options
-        )
+        sel_str = run_menu("Which agent integrations do you want to uninstall?", options)
         selected_targets = sel_str.split() if sel_str else []
 
     if not selected_targets:
@@ -182,38 +173,22 @@ def run_uninstall(
             access_removed = _remove_owned_json_settings(
                 settings_path,
                 install_state.get("claude", {}),
-                {
-                    "permissions.additionalDirectories": (
-                        "permissions",
-                        "additionalDirectories",
-                    )
-                },
+                {"permissions.additionalDirectories": ("permissions", "additionalDirectories")},
                 dry_run,
             )
             links = _remove_repo_links(
-                [
-                    home / ".claude/skills/wiki-context",
-                    *sorted((home / ".claude/commands").glob("wiki-*.md")),
-                ],
+                [home / ".claude/skills/wiki-context", *sorted((home / ".claude/commands").glob("wiki-*.md"))],
                 repo_root,
                 dry_run,
             )
             if removed:
-                print(
-                    f"│    {S_DOT_RED} {prefix} {removed} SessionStart hook(s) from ~/.claude/settings.json"
-                )
+                print(f"│    {S_DOT_RED} {prefix} {removed} SessionStart hook(s) from ~/.claude/settings.json")
             else:
-                print(
-                    f"│    {S_CIRCLE_DIM} no wiki hooks found in ~/.claude/settings.json"
-                )
+                print(f"│    {S_CIRCLE_DIM} no wiki hooks found in ~/.claude/settings.json")
             if access_removed or links:
-                print(
-                    f"│    {S_DOT_RED} {prefix} owned access and {links} artifact link(s)"
-                )
+                print(f"│    {S_DOT_RED} {prefix} owned access and {links} artifact link(s)")
             if not dry_run:
-                _remove_created_file_if_empty(
-                    settings_path, install_state.get("claude", {}), dry_run
-                )
+                _remove_created_file_if_empty(settings_path, install_state.get("claude", {}), dry_run)
                 clear_owned_values(home, "claude")
             print("│")
 
@@ -227,26 +202,18 @@ def run_uninstall(
                     if isinstance(mcp_servers, dict) and "brian-wiki" in mcp_servers:
                         mcp_servers.pop("brian-wiki")
                         if not dry_run:
-                            created = str(c_desktop_config) in install_state.get(
-                                "claude-desktop", {}
-                            ).get("createdFiles", [])
+                            created = str(c_desktop_config) in install_state.get("claude-desktop", {}).get(
+                                "createdFiles", []
+                            )
                             if created and data == {"mcpServers": {}}:
                                 c_desktop_config.unlink()
                             else:
-                                atomic_write_json(
-                                    c_desktop_config, data, create_backup=False
-                                )
-                        print(
-                            f"│    {S_DOT_RED} {prefix} brian-wiki MCP server from {c_desktop_config}"
-                        )
+                                atomic_write_json(c_desktop_config, data, create_backup=False)
+                        print(f"│    {S_DOT_RED} {prefix} brian-wiki MCP server from {c_desktop_config}")
                     else:
-                        print(
-                            f"│    {S_CIRCLE_DIM} no brian-wiki MCP server found in {c_desktop_config}"
-                        )
+                        print(f"│    {S_CIRCLE_DIM} no brian-wiki MCP server found in {c_desktop_config}")
                 except (AttributeError, OSError, TypeError, json.JSONDecodeError) as e:
-                    print(
-                        f"│    {S_CROSS_RED} failed to process {c_desktop_config}: {e}"
-                    )
+                    print(f"│    {S_CROSS_RED} failed to process {c_desktop_config}: {e}")
             else:
                 print(f"│    {S_CIRCLE_DIM} no config file found at {c_desktop_config}")
 
@@ -261,8 +228,7 @@ def run_uninstall(
                 try:
                     text = config_toml.read_text(encoding="utf-8")
                     new_text = _restore_codex_writable_root(
-                        _restore_codex_features_hooks(_strip_codex_wiki_hooks(text)),
-                        repo_root,
+                        _restore_codex_features_hooks(_strip_codex_wiki_hooks(text)), repo_root
                     )
                     if new_text != text:
                         # Validate TOML before modifying
@@ -270,30 +236,18 @@ def run_uninstall(
                         if not dry_run:
                             shutil.copy2(config_toml, backup_path(config_toml))
                             config_toml.write_text(new_text, encoding="utf-8")
-                        print(
-                            f"│    {S_DOT_RED} {prefix} wiki hook configuration from ~/.codex/config.toml"
-                        )
+                        print(f"│    {S_DOT_RED} {prefix} wiki hook configuration from ~/.codex/config.toml")
                     else:
-                        print(
-                            f"│    {S_CIRCLE_DIM} no wiki configuration found in ~/.codex/config.toml"
-                        )
+                        print(f"│    {S_CIRCLE_DIM} no wiki configuration found in ~/.codex/config.toml")
                 except (tomllib.TOMLDecodeError, OSError) as e:
-                    print(
-                        f"│    {S_CROSS_RED} failed to process ~/.codex/config.toml: {e}"
-                    )
+                    print(f"│    {S_CROSS_RED} failed to process ~/.codex/config.toml: {e}")
             else:
-                print(
-                    f"│    {S_CIRCLE_DIM} no wiki configuration found in ~/.codex/config.toml"
-                )
-            links = _remove_repo_links(
-                [home / ".codex/skills/wiki-context"], repo_root, dry_run
-            )
+                print(f"│    {S_CIRCLE_DIM} no wiki configuration found in ~/.codex/config.toml")
+            links = _remove_repo_links([home / ".codex/skills/wiki-context"], repo_root, dry_run)
             if links:
                 print(f"│    {S_DOT_RED} {prefix} {links} skill link(s)")
             if not dry_run:
-                _remove_created_file_if_empty(
-                    config_toml, install_state.get("codex", {}), dry_run
-                )
+                _remove_created_file_if_empty(config_toml, install_state.get("codex", {}), dry_run)
                 clear_owned_values(home, "codex")
             print("│")
 
@@ -310,25 +264,15 @@ def run_uninstall(
                 },
                 dry_run,
             )
-            links = _remove_repo_links(
-                [home / ".gemini/skills/wiki-context"], repo_root, dry_run
-            )
+            links = _remove_repo_links([home / ".gemini/skills/wiki-context"], repo_root, dry_run)
             if removed:
-                print(
-                    f"│    {S_DOT_RED} {prefix} {removed} SessionStart hook(s) from ~/.gemini/settings.json"
-                )
+                print(f"│    {S_DOT_RED} {prefix} {removed} SessionStart hook(s) from ~/.gemini/settings.json")
             else:
-                print(
-                    f"│    {S_CIRCLE_DIM} no wiki hooks found in ~/.gemini/settings.json"
-                )
+                print(f"│    {S_CIRCLE_DIM} no wiki hooks found in ~/.gemini/settings.json")
             if access_removed or links:
-                print(
-                    f"│    {S_DOT_RED} {prefix} owned access and {links} skill link(s)"
-                )
+                print(f"│    {S_DOT_RED} {prefix} owned access and {links} skill link(s)")
             if not dry_run:
-                _remove_created_file_if_empty(
-                    gsettings, install_state.get("gemini", {}), dry_run
-                )
+                _remove_created_file_if_empty(gsettings, install_state.get("gemini", {}), dry_run)
                 clear_owned_values(home, "gemini")
             print("│")
 
@@ -349,21 +293,13 @@ def run_uninstall(
                             instructions_file.write_text(new_text, encoding="utf-8")
                         else:
                             instructions_file.unlink()
-                    print(
-                        f"│    {S_DOT_RED} {prefix} instruction block from ~/.copilot/copilot-instructions.md"
-                    )
+                    print(f"│    {S_DOT_RED} {prefix} instruction block from ~/.copilot/copilot-instructions.md")
                 else:
-                    print(
-                        f"│    {S_CIRCLE_DIM} no wiki instruction block found in ~/.copilot/copilot-instructions.md"
-                    )
+                    print(f"│    {S_CIRCLE_DIM} no wiki instruction block found in ~/.copilot/copilot-instructions.md")
             else:
-                print(
-                    f"│    {S_CIRCLE_DIM} no wiki instruction block found in ~/.copilot/copilot-instructions.md"
-                )
+                print(f"│    {S_CIRCLE_DIM} no wiki instruction block found in ~/.copilot/copilot-instructions.md")
             if not dry_run:
-                _remove_created_file_if_empty(
-                    instructions_file, install_state.get("copilot", {}), dry_run
-                )
+                _remove_created_file_if_empty(instructions_file, install_state.get("copilot", {}), dry_run)
                 clear_owned_values(home, "copilot")
             print("│")
 
@@ -385,9 +321,7 @@ def run_uninstall(
             ):
                 print(f"│    {S_DOT_RED} {prefix} owned Cursor CLI permission rules")
             if not dry_run:
-                _remove_created_file_if_empty(
-                    cursor_config, install_state.get("skills", {}), dry_run
-                )
+                _remove_created_file_if_empty(cursor_config, install_state.get("skills", {}), dry_run)
                 clear_owned_values(home, "skills")
             print("│")
 
@@ -402,17 +336,11 @@ def run_uninstall(
                     if not dry_run:
                         shutil.copy2(gemini_md, backup_path(gemini_md))
                         gemini_md.write_text(updated, encoding="utf-8")
-                    print(
-                        f"│    {S_DOT_RED} {prefix} @import line from ~/.gemini/GEMINI.md"
-                    )
+                    print(f"│    {S_DOT_RED} {prefix} @import line from ~/.gemini/GEMINI.md")
                 else:
-                    print(
-                        f"│    {S_CIRCLE_DIM} no wiki @import line found in ~/.gemini/GEMINI.md"
-                    )
+                    print(f"│    {S_CIRCLE_DIM} no wiki @import line found in ~/.gemini/GEMINI.md")
             else:
-                print(
-                    f"│    {S_CIRCLE_DIM} no wiki @import line found in ~/.gemini/GEMINI.md"
-                )
+                print(f"│    {S_CIRCLE_DIM} no wiki @import line found in ~/.gemini/GEMINI.md")
             agy_settings = home / ".gemini/antigravity-cli/settings.json"
             if _remove_owned_json_settings(
                 agy_settings,
@@ -420,9 +348,7 @@ def run_uninstall(
                 {"permissions.allow": ("permissions", "allow")},
                 dry_run,
             ):
-                print(
-                    f"│    {S_DOT_RED} {prefix} owned Antigravity CLI permission rules"
-                )
+                print(f"│    {S_DOT_RED} {prefix} owned Antigravity CLI permission rules")
             if not dry_run:
                 owned = install_state.get("antigravity", {})
                 _remove_created_file_if_empty(gemini_md, owned, dry_run)
@@ -431,10 +357,7 @@ def run_uninstall(
             print("│")
 
     # The CLI is shared: remove it only after the last integration is gone.
-    remaining = any(
-        integration_state(agent, home, repo_root) != "absent"
-        for agent in SUPPORTED_AGENTS
-    )
+    remaining = any(integration_state(agent, home, repo_root) != "absent" for agent in SUPPORTED_AGENTS)
     if not remaining:
         print("│  CLI Binary on PATH")
         source_wiki = (repo_root / "bin" / "wiki").resolve()
@@ -469,10 +392,6 @@ def run_uninstall(
         print("│")
 
     if dry_run:
-        print(
-            f"└  {C_BOLD}Done. (Dry run mode — no files or settings were modified){C_RESET}"
-        )
+        print(f"└  {C_BOLD}Done. (Dry run mode — no files or settings were modified){C_RESET}")
     else:
-        print(
-            f"└  {C_BOLD}Done. Start a new session in each configured agent to load context.{C_RESET}"
-        )
+        print(f"└  {C_BOLD}Done. Start a new session in each configured agent to load context.{C_RESET}")

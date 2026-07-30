@@ -92,3 +92,19 @@ class TestDefaultsAndOverrides:
         """Privacy-by-default: no people_tracking unless wiki.toml opts in."""
         cfg = WikiConfig(REPO_ROOT)
         assert cfg.agent_rules == []
+
+    def test_upkeep_proactivity_loaded(self, tmp_path: Path):
+        (tmp_path / "wiki.toml").write_text(
+            '[upkeep]\nproactivity = "capture"\ntriggers = ["Anything durable"]\ninstructions = """Log it."""\n',
+            encoding="utf-8",
+        )
+        cfg = WikiConfig(tmp_path)
+        assert cfg.upkeep_proactivity == "capture"
+
+    def test_upkeep_proactivity_invalid_ignored(self, tmp_path: Path):
+        (tmp_path / "wiki.toml").write_text(
+            '[upkeep]\nproactivity = "YOLO"\n',
+            encoding="utf-8",
+        )
+        cfg = WikiConfig(tmp_path)
+        assert cfg.upkeep_proactivity == ""

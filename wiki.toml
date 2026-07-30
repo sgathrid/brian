@@ -27,6 +27,7 @@ company_file = "wiki/entities/brian-overview.md"
 registry_file = "internal/registry.md"
 
 [upkeep]
+proactivity = "selective"
 triggers = [
     "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
     "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report"

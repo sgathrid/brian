@@ -12,6 +12,14 @@ knowledge that no repository contains. The CLI is on your PATH.
 
 Cite pages as `[[Wikilink]]`, and never invent wiki facts — query first.
 
+Keeping it current:
+Proactivity: selective — offer updates for durable, high-signal changes
+- A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering
+- Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report
+Then say which page to add or update and why, and let the user decide. Never commit or push the wiki yourself.
+Refactors, dependency bumps, tests and formatting need nothing — 'already current' is a valid answer; do not invent work.
+
+
 For durable source-backed knowledge, prepare one JSON update payload and run
 `wiki knowledge update --input <payload.json>` to preview it without writes. Show the proposed changes to the
 user and wait for explicit approval. Then apply the unchanged payload with
@@ -19,9 +27,4 @@ user and wait for explicit approval. Then apply the unchanged payload with
 source accounting, retrieval cases, generated files, validation, and rollback; it never commits or pushes.
 The complete payload contract and source placeholder are documented in
 `$(wiki root)/internal/skills/wiki-context/SKILL.md`.
-
-When a functionality-changing PR goes up, or you author or substantially revise a project document
-(`.md`, `.html`, `.pdf`), say which knowledge-base page should be added or updated and why,
-then let the user decide. Never commit or push the wiki yourself. Refactors, dependency bumps, tests
-and formatting need nothing — "already current" is a valid answer.
 <!-- brian-wiki:end -->

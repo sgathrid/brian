@@ -8,6 +8,7 @@ from pathlib import Path
 from ..core.generate import generate_backlinks, generate_index, generate_registry, generate_tags
 from ..core.page import WikiDatabase
 from ..ui.menu import is_tty, run_confirm, run_menu, run_scroll_viewer
+from .personalization import load_settings_restore
 
 C_RESET = "\033[0m"
 C_BOLD = "\033[1m"
@@ -19,6 +20,30 @@ S_DOT_RED = f"{C_RED}●{C_RESET}"
 S_CHECK_GREEN = f"{C_GREEN}✓{C_RESET}"
 S_CIRCLE_DIM = f"{C_DIM}○{C_RESET}"
 
+PAGE_MODES = ("full", "scope", "orphans")
+SETTINGS_ALIASES = frozenset({"settings", "user-settings", "user_settings"})
+
+
+def _settings_runner():
+    return load_settings_restore()
+
+
+def _print_mode_help(*, has_settings: bool) -> None:
+    print("wiki reset: refusing to run without an explicit mode.", file=sys.stderr)
+    print("  wiki reset full --yes              # delete all pages (raw/ needs --include-raw)", file=sys.stderr)
+    print("  wiki reset scope --scope X         # delete one scope", file=sys.stderr)
+    print("  wiki reset orphans                 # delete unlinked pages", file=sys.stderr)
+    if has_settings:
+        print(
+            "  wiki reset settings                # restore stock wiki.toml (not pages)",
+            file=sys.stderr,
+        )
+        print(
+            "  wiki reset settings upkeep|identity|all|factory [--dry-run] [-y]",
+            file=sys.stderr,
+        )
+    print("  add --dry-run to preview any of the above.", file=sys.stderr)
+
 
 def run_reset(
     repo_root: Path,
@@ -28,32 +53,69 @@ def run_reset(
     non_interactive: bool = False,
     confirmed: bool = False,
     include_raw: bool = False,
+    stock_use_case: bool = False,
 ) -> None:
-    """Executes full or selective reset of the wiki data payload."""
+    """Reset wiki pages, or (when available) restore stock user settings."""
     targets = targets or []
     mode = targets[0].lower() if targets else ""
+    settings_target = targets[1].lower() if len(targets) > 1 else ""
+    run_settings_restore = _settings_runner()
+    has_settings = run_settings_restore is not None
 
     if not mode and not non_interactive and is_tty():
         options = [
-            ("full", "Full Reset (Wipe all wiki pages & raw files to start 100% fresh)"),
-            ("scope", "Scope Reset (Purge pages in a specific scope)"),
-            ("orphans", "Orphan Sweep (Purge unlinked orphan pages)"),
+            ("full", "Full reset", "wipe wiki pages (raw/ needs --include-raw)", True),
+            ("scope", "Scope reset", "purge pages in one scope", False),
+            ("orphans", "Orphan sweep", "purge unlinked orphan pages", False),
         ]
-        mode = run_menu("Select reset type:", options, title="Brian Wiki Reset", single_select=True)
+        if has_settings:
+            options.append(
+                (
+                    "settings",
+                    "User settings",
+                    "restore stock wiki.toml packs/names — does not delete pages",
+                    False,
+                )
+            )
+        mode = run_menu(
+            "What do you want to reset?",
+            options,
+            title="Brian Wiki Reset",
+            single_select=True,
+        )
 
     # NEVER default to a destructive mode. `wiki reset` with no arguments and no TTY — which is how
     # agents and scripts invoke things — previously fell through to "full" and deleted every wiki
     # page plus all of raw/ with no confirmation. raw/ is git-ignored, so that loss is permanent.
     if not mode:
-        print("wiki reset: refusing to run without an explicit mode.", file=sys.stderr)
-        print("  wiki reset full --yes        # delete all pages (raw/ needs --include-raw)", file=sys.stderr)
-        print("  wiki reset scope --scope X   # delete one scope", file=sys.stderr)
-        print("  wiki reset orphans           # delete unlinked pages", file=sys.stderr)
-        print("  add --dry-run to preview any of the above.", file=sys.stderr)
+        _print_mode_help(has_settings=has_settings)
         raise SystemExit(2)
 
-    if mode not in ("full", "scope", "orphans"):
-        print(f"wiki reset: unknown mode {mode!r} (expected full, scope or orphans)", file=sys.stderr)
+    if mode in SETTINGS_ALIASES:
+        if run_settings_restore is None:
+            print("wiki reset settings: not available in this checkout.", file=sys.stderr)
+            print(
+                "Edit wiki.toml instead:\n"
+                "  [wiki]   name, short_name, description, agent_rules\n"
+                "  [upkeep] proactivity, triggers, instructions",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        ok = run_settings_restore(
+            repo_root,
+            settings_target,
+            dry_run=dry_run,
+            non_interactive=non_interactive,
+            confirmed=confirmed,
+            stock_use_case=stock_use_case,
+        )
+        if not ok:
+            raise SystemExit(1)
+        return
+
+    if mode not in PAGE_MODES:
+        expected = "full, scope, orphans" + (", settings" if has_settings else "")
+        print(f"wiki reset: unknown mode {mode!r} (expected {expected})", file=sys.stderr)
         raise SystemExit(2)
 
     wiki_dir = repo_root / "wiki"
@@ -78,7 +140,13 @@ def run_reset(
             else:
                 prompt = f"Confirm {mode} reset?"
 
-            confirmed = run_confirm(prompt, default=False, title="Brian Wiki Reset")
+            confirmed = run_confirm(
+                prompt,
+                default=False,
+                title="Brian Wiki Reset",
+                confirm_label="delete matching files",
+                cancel_label="keep files",
+            )
             if not confirmed:
                 print("wiki reset: cancelled by user.", file=sys.stderr)
                 return

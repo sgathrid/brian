@@ -104,12 +104,15 @@ Then continue with `uv sync` above.
 wiki init
 ```
 
-An interactive setup guides you through your **use case** (Company, IT helpdesk, Engineering, Research, or Personal), **organization name**, and optional extras:
+An interactive setup guides you through:
 
-- **Agent behavior** — multi-select with ↑↓ / space (people tracking, assets, ADRs, …)
-- **What agents offer to save** — plain-English triggers & instructions (`[upkeep]`)
+1. **Use case** — Company, IT helpdesk, Engineering, Research, or Personal  
+2. **Organization name**  
+3. **Agent behavior** (optional) — multi-select with ↑↓ / **space** (people tracking, assets, ADRs, …)  
+4. **Proactivity** (always shown) — how eager agents are about wiki updates (`selective` / `active` / `capture` / `silent`)  
+5. **Fine-tune triggers & instructions** — offered for `selective`, or when re-running the same posture so you can edit plain-English `[upkeep]` text  
 
-Defaults are fine for most teams; advanced steps are opt-in. Re-run `wiki init` anytime — current values are pre-selected, and your overview page + hand-edited upkeep text are preserved.
+Defaults are fine for most teams. Re-run `wiki init` anytime — current values are pre-selected; overview pages and hand-edited upkeep text are preserved unless you change posture or opt into editing again.
 
 *(For automated or non-interactive setups, see [Customize](#customize) below.)*
 
@@ -315,19 +318,21 @@ agent_rules = []
 # agent_rules = ["people_tracking", "asset_tracking", "security_notice"]
 ```
 
-| Rule ID | Plain English |
-|---|---|
-| `people_tracking` | Keep pages for teammates, roles, and who owns what |
-| `asset_tracking` | Laptops, asset tags, licenses, access request SOPs |
-| `security_notice` | Never write passwords/API keys into wiki pages |
-| `adrs` | Record architecture decisions (context → decision → consequences) |
-| `strict_sources` | Every new claim should cite a file under `raw/` |
-| `quick_capture` | Turn messy notes into linked topic pages quickly |
+| Rule ID | Plain English | Extra |
+|---|---|---|
+| `people_tracking` | Keep pages for teammates, roles, and who owns what | Soft person-page shape guidance |
+| `asset_tracking` | Laptops, asset tags, licenses, access request SOPs | Soft asset-page shape guidance |
+| `security_notice` | Never write passwords/API keys into wiki pages | — |
+| `adrs` | Record architecture decisions (context → decision → consequences) | Soft ADR shape guidance |
+| `strict_sources` | Every new claim should cite a file under `raw/` | — |
+| `quick_capture` | Turn messy notes into linked topic pages quickly | — |
+
+Enabled rules ship as session-start bullets; some also add short **page-shape guidance** (still soft — ingest validation stays fixed).
 
 After editing:
 
 1. Save `wiki.toml`
-2. Either re-run `wiki init -y` (refreshes agent pointer text) **or** just start a new agent session — the SessionStart hook reads `agent_rules` live
+2. Either re-run `wiki init -y` (refreshes agent pointer text) **or** just start a new agent session — the SessionStart hook reads `agent_rules` + `[upkeep]` live
 3. Or re-run `wiki init` interactively and multi-select behaviors again (current rules are pre-checked)
 
 ```bash
@@ -337,10 +342,22 @@ wiki init --rules people_tracking,security_notice -y
 
 ### What’s worth saving (`[upkeep]`)
 
-Tells agents **when** to offer a wiki update and **how** to phrase it. Presets ship per use case; customize in init (“Customize what agents offer to save?”) or edit here:
+Controls **how proactive** agents are, **when** they offer a wiki update, and **how** they phrase it.
+
+During `wiki init` you pick a proactivity posture (always shown):
+
+| `proactivity` | Meaning |
+|---|---|
+| `selective` | Durable, high-signal changes only (default; use-case trigger preset) |
+| `active` | Offer updates often; still ask first |
+| `capture` | Prefer logging — treat most durable context as worth saving |
+| `silent` | Only update when the user asks |
+
+Session start always injects **both** triggers and instructions (plus the proactivity label). Agents still ask before writing and never auto-commit.
 
 ```toml
 [upkeep]
+proactivity = "selective"  # or active | capture | silent
 triggers = [
     "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
     "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report",
@@ -357,15 +374,45 @@ Examples of good triggers (plain English):
 - Updating a customer-facing policy or pricing doc
 - Closing a decision in a design review
 
-Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you opt into editing it again.
+Want “log everything durable”? set `proactivity = "capture"` (or pick it in init). Want quiet agents? use `silent` — and clear or rewrite `triggers` if you want agents to stay quiet about offers too (`silent` is a label; triggers still inject unless empty).
+
+**Fine-tune gating:** first-run `active` / `capture` / `silent` apply that posture’s pack and skip the text editor. To customize wording without switching posture, re-run `wiki init`, keep the same proactivity, and accept the edit prompt — or hand-edit `wiki.toml`.
+
+Hand-edited `[upkeep]` text is **kept** when you re-run `wiki init` unless you change posture (which loads that posture’s pack) or opt into editing triggers/instructions again.
+
+### Reset pages or user settings
+
+One command: `wiki reset`. TTY menu (or pass a mode):
+
+| Mode | Effect |
+|---|---|
+| `full` / `scope` / `orphans` | Delete matching **pages** (not `wiki.toml`) |
+| `settings` | Restore stock **user settings** in `wiki.toml` (not pages) |
+
+| Settings target | Restores | Keeps |
+|---|---|---|
+| `wiki reset settings upkeep` | Stock triggers + instructions for **current** proactivity / use case | Name, rules, proactivity, `use_case` |
+| `wiki reset settings identity` | `name` / `short_name` / `description` | Upkeep text, rules, pages, `use_case` |
+| `wiki reset settings all` | Identity + `selective` upkeep pack + default `agent_rules` for **this** use case | Pages, integrations, `use_case` |
+| `wiki reset settings factory` | Same as `all`, and force `use_case = company` (fresh-checkout defaults) | Pages |
+| `… all --use-case-stock` | Alias of `factory` (scripts) | Pages |
+
+```bash
+wiki reset                    # TTY: pick pages vs user settings
+wiki reset settings           # TTY: upkeep / identity / all (this use case) / factory
+wiki reset settings upkeep --dry-run
+wiki reset settings factory -y   # back to company defaults in wiki.toml
+```
+
+Overview page **body** is never rewritten by settings restore.
 
 ### Other knobs
 
-- **Org name / description** → `wiki.toml` or `wiki init`
+- **Org name / description** → `wiki.toml` or `wiki init` or `wiki reset settings identity`
 - **Connected tools** → `wiki install` / `wiki uninstall`
 - **How agents talk about the wiki** → `_templates/agent-pointer.md` + `internal/skills/wiki-context/`
 
-**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh.
+**Re-running `wiki init`:** current values are pre-selected. Overview pages and custom upkeep are preserved; `wiki.toml` is rewritten with your choices; the agent pointer + catalog indexes refresh. Changing **use case** refreshes default agent rules for that preset. Selective trigger/instruction text that still matches the *old* use-case stock pack is refreshed to the new pack; hand-edited text is kept.
 
 Everything important is text. Fork it and make it yours.
 

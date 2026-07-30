@@ -174,7 +174,8 @@ def main():
     p_hook = subparsers.add_parser("hook", help="Execute agent hooks")
     p_hook.add_argument("event", choices=["session-start"], help="Hook event type")
 
-    # wiki init (optional — only when lifecycle/init.py is present)
+    # wiki init — full setup when lifecycle/init.py is present; stub otherwise
+    # so operators never hit a bare argparse "invalid choice" dead-end.
     if _HAS_INIT:
         p_init = subparsers.add_parser(
             "init",
@@ -212,6 +213,16 @@ def main():
             action="store_true",
             help="Non-interactive: accept flags/defaults, no prompts",
         )
+    else:
+        subparsers.add_parser(
+            "init",
+            help="Not available in this checkout — edit wiki.toml instead",
+            description=(
+                "Interactive init is not shipped in this checkout. "
+                "Edit wiki.toml ([wiki], [upkeep]) directly, then start a new agent session "
+                "or run wiki status to verify. See README → Customize agent upkeep."
+            ),
+        )
 
     # wiki install [targets...]
     p_install = subparsers.add_parser("install", help="Install agent integrations")
@@ -236,19 +247,42 @@ def main():
     p_sync = subparsers.add_parser("sync", help="Safely refresh the local company wiki from origin/main")
     p_sync.add_argument("--force", action="store_true", help="Bypass the session sync throttle")
 
-    # wiki reset [type...]
-    p_reset = subparsers.add_parser("reset", help="Reset or purge wiki data payload")
-    p_reset.add_argument("targets", nargs="*", help="Reset mode (full, scope, orphans)")
-    p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
-    p_reset.add_argument("--dry-run", action="store_true", help="Preview reset without deleting files")
+    # wiki reset [type...] — pages, or (Brian) user settings via optional module
+    p_reset = subparsers.add_parser(
+        "reset",
+        help="Reset wiki pages or restore stock user settings",
+        description=(
+            "Page modes: full / scope / orphans (delete knowledge pages). "
+            "User settings (when available): wiki reset settings — restores stock "
+            "wiki.toml packs/names without deleting pages. "
+            "Use 'factory' (or all --use-case-stock) for fresh-checkout company defaults. "
+            "Natural-language triggers/instructions live under [upkeep] in wiki.toml."
+        ),
+    )
     p_reset.add_argument(
-        "-y", "--yes", action="store_true", help="Confirm deletion (required for any non-dry-run reset)"
+        "targets",
+        nargs="*",
+        help="Mode: full | scope | orphans | settings [upkeep|identity|all|factory]",
+    )
+    p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
+    p_reset.add_argument("--dry-run", action="store_true", help="Preview without making changes")
+    p_reset.add_argument(
+        "-y",
+        "--yes",
+        action="store_true",
+        help="Confirm (required non-interactively for page delete or settings restore)",
     )
     p_reset.add_argument(
         "--include-raw",
         action="store_true",
-        help="Also delete raw/ source documents (git-ignored — this is IRREVERSIBLE)",
+        help="With full: also delete raw/ source documents (git-ignored — IRREVERSIBLE)",
     )
+    p_reset.add_argument(
+        "--use-case-stock",
+        action="store_true",
+        help="With settings all: force use_case=company (same as target 'factory')",
+    )
+
 
     args = parser.parse_args()
 
@@ -364,6 +398,14 @@ def main():
     elif args.subcommand == "init":
         if not _HAS_INIT or run_init is None:
             print("wiki init is not available in this checkout.", file=sys.stderr)
+            print(
+                "Edit wiki.toml instead:\n"
+                "  [wiki]   name, short_name, description, agent_rules\n"
+                "  [upkeep] proactivity (label), triggers, instructions\n"
+                "Then run `wiki status` or start a new agent session.\n"
+                "See README → Customize agent upkeep.",
+                file=sys.stderr,
+            )
             sys.exit(2)
         if not run_init(
             repo_root,
@@ -409,6 +451,7 @@ def main():
             non_interactive=args.yes,
             confirmed=args.yes,
             include_raw=args.include_raw,
+            stock_use_case=bool(getattr(args, "use_case_stock", False)),
         )
 
 
