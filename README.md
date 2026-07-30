@@ -114,7 +114,7 @@ An interactive setup guides you through:
 
 Defaults are fine for most teams. Re-run `wiki init` anytime — current values are pre-selected; overview pages and hand-edited upkeep text are preserved unless you change posture or opt into editing again.
 
-*(For automated or non-interactive setups, see [Customize](#customize) below.)*
+*(For automated or non-interactive setups, see [Customize](#customize-in-plain-english) below.)*
 
 ### 3. Connect your AI tools
 
