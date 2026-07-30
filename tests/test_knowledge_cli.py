@@ -26,7 +26,7 @@ def test_structured_cli_query_matches_mcp_adapter() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout) == asdict(
-        server.query_company_knowledge("What is Brian?", limit=3)
+        server.query_knowledge("What is Brian?", limit=3)
     )
     assert completed.stderr == ""
 
@@ -35,12 +35,22 @@ def test_structured_cli_read_matches_mcp_adapter_and_rejects_escape() -> None:
     completed = _run("read", "wiki/entities/brian-overview.md")
 
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(completed.stdout) == asdict(server.read_company_page("wiki/entities/brian-overview.md"))
+    assert json.loads(completed.stdout) == asdict(server.read_page("wiki/entities/brian-overview.md"))
 
     escaped = _run("read", "../README")
     assert escaped.returncode == 2
     assert escaped.stdout == ""
-    assert "invalid company wiki path" in json.loads(escaped.stderr)["error"]["message"]
+    assert "invalid knowledge page reference" in json.loads(escaped.stderr)["error"]["message"]
+
+
+def test_structured_cli_read_accepts_page_references() -> None:
+    expected = asdict(server.read_page("wiki/entities/brian-overview.md"))
+
+    for ref in ("wiki://page/entities/brian-overview", "Brian Overview", "[[Brian Overview]]", "brian-overview"):
+        completed = _run("read", ref)
+
+        assert completed.returncode == 0, completed.stderr
+        assert json.loads(completed.stdout) == expected
 
 
 def test_structured_cli_update_reads_json_from_stdin() -> None:
@@ -55,7 +65,7 @@ def test_structured_cli_source_inventory_matches_mcp_adapter() -> None:
     completed = _run("sources")
 
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(completed.stdout) == asdict(server.list_company_sources())
+    assert json.loads(completed.stdout) == asdict(server.list_sources())
 
 
 def test_structured_cli_rejects_out_of_range_source_inspection_limit() -> None:

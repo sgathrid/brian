@@ -55,7 +55,7 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
         async with stdio_client(parameters) as (reader, writer), ClientSession(reader, writer) as session:
             initialized = await session.initialize()
             assert initialized.serverInfo.name == "Brian Wiki"
-            result = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
+            result = await session.call_tool("query_knowledge", {"question": "wiki company info"})
             assert not result.isError
             assert result.structuredContent["hits"][0]["title"] == "Brian Overview"
             cli = await asyncio.to_thread(
@@ -69,17 +69,17 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
             assert json.loads(cli.stdout) == result.structuredContent
 
             product = await session.call_tool(
-                "query_company_knowledge", {"question": "What is Brian?"}
+                "query_knowledge", {"question": "What is Brian?"}
             )
             assert product.structuredContent["hits"][0]["title"] == "Brian Overview"
 
             customers = await session.call_tool(
-                "query_company_knowledge", {"question": "cross-LLM context engine"}
+                "query_knowledge", {"question": "cross-LLM context engine"}
             )
             assert customers.structuredContent["hits"][0]["title"] == "Brian Overview"
 
             unsupported = await session.call_tool(
-                "query_company_knowledge",
+                "query_knowledge",
                 {"question": "Who founded Brian and how many employees are there?"},
             )
             assert unsupported.structuredContent["no_results"] is True
@@ -126,19 +126,19 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             listed = await session.list_tools()
             tools = {tool.name: tool for tool in listed.tools}
             assert set(tools) == {
-                "query_company_knowledge",
-                "read_company_page",
-                "list_company_sources",
-                "inspect_company_source",
-                "apply_knowledge_update",
+                "query_knowledge",
+                "read_page",
+                "list_sources",
+                "inspect_source",
+                "update_knowledge",
             }
             assert all(tool.outputSchema for tool in tools.values())
-            assert tools["query_company_knowledge"].annotations.readOnlyHint is True
-            assert tools["list_company_sources"].annotations.readOnlyHint is True
-            assert tools["inspect_company_source"].annotations.readOnlyHint is True
-            assert tools["apply_knowledge_update"].annotations.destructiveHint is True
+            assert tools["query_knowledge"].annotations.readOnlyHint is True
+            assert tools["list_sources"].annotations.readOnlyHint is True
+            assert tools["inspect_source"].annotations.readOnlyHint is True
+            assert tools["update_knowledge"].annotations.destructiveHint is True
 
-            source_list = await session.call_tool("list_company_sources", {})
+            source_list = await session.call_tool("list_sources", {})
             assert not source_list.isError
             source_rows = source_list.structuredContent["sources"]
             assert any(
@@ -155,7 +155,7 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             assert cli_sources.returncode == 0, cli_sources.stderr
             assert json.loads(cli_sources.stdout) == source_list.structuredContent
 
-            inspected = await session.call_tool("inspect_company_source", {"path": source_rel})
+            inspected = await session.call_tool("inspect_source", {"path": source_rel})
             assert not inspected.isError
             assert inspected.structuredContent["content"] == source
             assert inspected.structuredContent["label"] == "raw evidence — not curated company knowledge"
@@ -175,11 +175,11 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             assert cli_inspected.returncode == 0, cli_inspected.stderr
             assert json.loads(cli_inspected.stdout) == inspected.structuredContent
 
-            query = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
+            query = await session.call_tool("query_knowledge", {"question": "wiki company info"})
             assert not query.isError
             assert query.structuredContent["hits"][0]["title"] == "Brian Overview"
 
-            invalid = await session.call_tool("read_company_page", {"path": "../AGENTS"})
+            invalid = await session.call_tool("read_page", {"ref": "../AGENTS"})
             assert invalid.isError
 
             templates = await session.list_resource_templates()
@@ -235,7 +235,7 @@ Compiled from `{placeholder}`.
                     },
                 ],
             }
-            preview = await session.call_tool("apply_knowledge_update", arguments)
+            preview = await session.call_tool("update_knowledge", arguments)
             assert not preview.isError
             assert preview.structuredContent["status"] == "ready"
             source_path = preview.structuredContent["source_path"]
@@ -255,7 +255,7 @@ Compiled from `{placeholder}`.
             assert json.loads(cli_preview.stdout) == preview.structuredContent
 
             arguments["approval_digest"] = preview.structuredContent["approval_digest"]
-            applied = await session.call_tool("apply_knowledge_update", arguments)
+            applied = await session.call_tool("update_knowledge", arguments)
             assert not applied.isError
             assert applied.structuredContent["status"] == "applied"
             assert applied.structuredContent["source_path"] == source_rel
