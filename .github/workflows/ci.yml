@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv for launch-command tests
+        uses: astral-sh/setup-uv@v8.3.2
+
+      - name: Install project and test tooling
+        run: python -m pip install --editable . pytest
+
+      - name: Run unit and contract tests
+        run: python -m pytest -q
+
+  quality:
+    name: Public repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install project and quality tooling
+        run: python -m pip install --editable . pytest ruff mypy
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy wikicli
+
+      - name: CLI smoke test
+        run: |
+          wiki --help > /dev/null
+          wiki root
+
+      - name: Audit public demo knowledge base
+        run: wiki audit
+
+      - name: Verify generated indexes
+        run: |
+          wiki gen
+          git diff --exit-code -- wiki/ internal/registry.md \
+            || { echo "::error::Generated files are stale. Run 'wiki gen' and commit the result."; exit 1; }
