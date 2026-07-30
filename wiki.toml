@@ -1,16 +1,9 @@
-# wiki.toml - Brian Knowledge Base Engine Manifest
-# Edit freely. agent_rules = optional behaviors (see README → Customize).
-# Re-run `wiki init` anytime, or change values here and restart your agents.
-#
-# Optional agent_rules (comma-separated list):
-#   people_tracking  — keep pages for teammates, roles, ownership
-#   asset_tracking   — laptops, licenses, access SOPs
-#   security_notice  — never write secrets into wiki pages
-#   adrs             — record architecture decisions
-#   strict_sources   — require raw/ citations on new claims
-#   quick_capture    — fast personal note synthesis
-# Example to enable people tracking:
-#   agent_rules = ["people_tracking"]
+# wiki.toml — edit freely in plain English.
+# agent_rules  = optional behaviors (see README → Customize)
+# [upkeep]     = proactivity + when agents should offer to update the wiki
+# Re-run `wiki init` anytime to change settings interactively
+# (overview page & hand-edited upkeep text are preserved).
+# Restore stock packs/names: `wiki reset settings` (does not delete pages).
 
 [wiki]
 name = "Brian Knowledge Base"
@@ -30,7 +23,7 @@ registry_file = "internal/registry.md"
 proactivity = "selective"
 triggers = [
     "A functionality-changing PR — new or renamed abstraction, changed architecture or data flow, a decision worth remembering",
-    "Authoring or substantially revising a project document (.md, .html, .pdf) — spec, application, report"
+    "Authoring or substantially revising a company-facing document (.md, .html, .pdf) — pitch, RFC, spec, application, report"
 ]
 instructions = """
 Then say which page to add or update and why, and let the user decide. Never commit or push the wiki yourself.
