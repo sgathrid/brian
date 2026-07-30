@@ -25,16 +25,13 @@ instructions = \"\"\"Ask first.\"\"\"
     monkeypatch.setattr("wikicli.lifecycle.status.load_agent_rule_catalog", dict)
     lines = _agent_behavior_lines(tmp_path)
     joined = "\n".join(lines)
-    assert "What agents will do" in joined
-    assert "prefer logging" in joined  # capture label gloss
-    assert "triggers: 2" in joined
-    assert "unavailable (no catalog)" in joined
+    assert "Agent upkeep for new sessions" in joined
+    assert "capture · 2 triggers · additional rules unavailable" in joined
     assert "adrs" not in joined
     assert "people_tracking" not in joined
-    assert "label only" in joined
 
 
-def test_agent_behavior_lines_with_catalog_shows_labels(tmp_path: Path, monkeypatch):
+def test_agent_behavior_lines_with_catalog_counts_resolved_rules(tmp_path: Path, monkeypatch):
     (tmp_path / "wiki.toml").write_text(
         """
 [wiki]
@@ -58,10 +55,9 @@ triggers = ["One"]
         },
     )
     joined = "\n".join(_agent_behavior_lines(tmp_path))
-    assert "Record architecture decisions" in joined
+    assert "selective · 1 trigger · 1 additional rule" in joined
     assert "unknown_rule" not in joined
-    assert "high-signal" in joined
-    assert "TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, then start a new session." in joined
+    assert "TIP: Edit wiki.toml, run `wiki status`, then start a new session." in joined
 
 
 def test_agent_behavior_lines_unset_proactivity_not_fake_selective(tmp_path: Path):
@@ -80,7 +76,7 @@ triggers = ["Ask"]
     joined = "\n".join(_agent_behavior_lines(tmp_path))
     # Config clears invalid keys; status must not invent selective.
     assert "(unset)" in joined
-    assert "selective —" not in joined
+    assert "selective" not in joined
 
 
 def test_run_status_prints_behavior_card(tmp_path: Path, capsys):
@@ -91,9 +87,7 @@ def test_run_status_prints_behavior_card(tmp_path: Path, capsys):
     )
     run_status(tmp_path)
     out = capsys.readouterr().out
-    assert "What agents will do" in out
-    assert "silent" in out
-    assert "only update the wiki when the user asks" in out
-    assert "label only" in out
-    assert "TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, then start a new session." in out
+    assert "Agent upkeep for new sessions" in out
+    assert "silent · 1 trigger · no additional rules" in out
+    assert "TIP: Edit wiki.toml, run `wiki status`, then start a new session." in out
     assert "S Wiki Agent Status" in out

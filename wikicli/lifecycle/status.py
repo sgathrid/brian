@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 
 from ..core.config import WikiConfig
-from .brief import PROACTIVITY_LABELS
 from .integrations import AGENT_REGISTRY, SUPPORTED_AGENTS, integration_state
 from .personalization import load_agent_rule_catalog
 from .sync import get_sync_status
@@ -29,46 +28,42 @@ AGENT_STATUS = {
 
 
 def _agent_behavior_lines(repo_root: Path) -> list[str]:
-    """Short 'what agents will do' card from wiki.toml.
+    """Compact new-session upkeep summary from wiki.toml.
 
     Mirrors session-start honesty: only catalog-resolved rules count as active,
-    and proactivity is shown as a brief label (not a silent rewrite of triggers).
+    and proactivity is shown as its configured label.
     """
     cfg = WikiConfig(repo_root)
-    key = (cfg.upkeep_proactivity or "").strip().lower()
-    if key in PROACTIVITY_LABELS:
-        proactivity_display = PROACTIVITY_LABELS[key]
-    elif key:
-        proactivity_display = f"{key} (unknown — ignored at session start)"
-    else:
-        proactivity_display = "(unset)"
+    proactivity = (cfg.upkeep_proactivity or "").strip().lower() or "(unset)"
 
     n_triggers = len([t for t in cfg.upkeep_triggers if str(t).strip()])
+    trigger_summary = f"{n_triggers} trigger{'s' if n_triggers != 1 else ''}"
 
     if not cfg.agent_rules:
-        rules = "none"
+        rule_summary = "no additional rules"
     else:
         catalog = load_agent_rule_catalog()
         if not catalog:
             # Same gate as format_rules_block: empty catalog ⇒ nothing injected.
-            rules = "unavailable (no catalog)"
+            rule_summary = "additional rules unavailable"
         else:
             labels: list[str] = []
             for rid in cfg.agent_rules:
                 meta = catalog.get(rid) if isinstance(catalog, dict) else None
                 if isinstance(meta, dict) and isinstance(meta.get("label"), str) and meta["label"].strip():
                     labels.append(meta["label"].strip())
-            rules = ", ".join(labels) if labels else "none"
+            n_rules = len(labels)
+            rule_summary = (
+                f"{n_rules} additional rule{'s' if n_rules != 1 else ''}"
+                if n_rules
+                else "no additional rules"
+            )
 
     return [
-        "What agents will do",
-        f"    proactivity: {proactivity_display}",
-        f"    {C_DIM}label only — session behavior = triggers + instructions{C_RESET}",
-        f"    rules: {rules}",
-        f"    triggers: {n_triggers}",
+        "Agent upkeep for new sessions",
+        f"    {proactivity} · {trigger_summary} · {rule_summary}",
         (
-            f"    {C_DIM}TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, "
-            f"then start a new session.{C_RESET}"
+            f"    {C_DIM}TIP: Edit wiki.toml, run `wiki status`, then start a new session.{C_RESET}"
         ),
     ]
 
