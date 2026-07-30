@@ -24,8 +24,7 @@ S_CIRCLE_DIM = f"{C_DIM}○{C_RESET}"
 S_CROSS_RED = f"{C_RED}✕{C_RESET}"
 
 AGENT_STATUS = {
-    agent_id: (spec.status_heading, spec.active_msg, spec.absent_msg)
-    for agent_id, spec in AGENT_REGISTRY.items()
+    agent_id: (spec.status_heading, spec.active_msg, spec.absent_msg) for agent_id, spec in AGENT_REGISTRY.items()
 }
 
 
@@ -107,9 +106,7 @@ def run_status(repo_root: Path) -> None:
         print(f"│    {S_CIRCLE_DIM} not linked in ~/.local/bin")
     print("│")
 
-    agent_states = [
-        (agent, integration_state(agent, home, repo_root)) for agent in SUPPORTED_AGENTS
-    ]
+    agent_states = [(agent, integration_state(agent, home, repo_root)) for agent in SUPPORTED_AGENTS]
 
     state_rank = {"active": 0, "stale": 1, "absent": 2}
     sorted_agents = sorted(agent_states, key=lambda item: state_rank.get(item[1], 2))
@@ -132,6 +129,4 @@ def run_status(repo_root: Path) -> None:
             print("│")
 
     print("│")
-    print(
-        f"└  {C_BOLD}Done. {active_count}/{len(SUPPORTED_AGENTS)} agent integrations active.{C_RESET}"
-    )
+    print(f"└  {C_BOLD}Done. {active_count}/{len(SUPPORTED_AGENTS)} agent integrations active.{C_RESET}")

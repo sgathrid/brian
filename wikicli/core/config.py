@@ -79,7 +79,5 @@ class WikiConfig:
         self.upkeep_instructions = upkeep_sec.get("instructions", "")
         raw_proactivity = str(upkeep_sec.get("proactivity", "")).strip().lower()
         self.upkeep_proactivity = (
-            raw_proactivity
-            if raw_proactivity in {"selective", "active", "capture", "silent"}
-            else ""
+            raw_proactivity if raw_proactivity in {"selective", "active", "capture", "silent"} else ""
         )
