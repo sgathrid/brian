@@ -391,16 +391,17 @@ One command: `wiki reset`. TTY menu (or pass a mode):
 
 | Settings target | Restores | Keeps |
 |---|---|---|
-| `wiki reset settings upkeep` | Stock triggers + instructions for **current** proactivity / use case | Name, rules, proactivity |
-| `wiki reset settings identity` | `name` / `short_name` / `description` | Upkeep text, rules, pages |
-| `wiki reset settings all` | Identity + `selective` upkeep pack + default `agent_rules` | Pages, integrations, `use_case` |
-| `… all --use-case-stock` | Same as `all`, and force `use_case = company` | Pages |
+| `wiki reset settings upkeep` | Stock triggers + instructions for **current** proactivity / use case | Name, rules, proactivity, `use_case` |
+| `wiki reset settings identity` | `name` / `short_name` / `description` | Upkeep text, rules, pages, `use_case` |
+| `wiki reset settings all` | Identity + `selective` upkeep pack + default `agent_rules` for **this** use case | Pages, integrations, `use_case` |
+| `wiki reset settings factory` | Same as `all`, and force `use_case = company` (fresh-checkout defaults) | Pages |
+| `… all --use-case-stock` | Alias of `factory` (scripts) | Pages |
 
 ```bash
 wiki reset                    # TTY: pick pages vs user settings
-wiki reset settings           # TTY submenu: upkeep / identity / all
+wiki reset settings           # TTY: upkeep / identity / all (this use case) / factory
 wiki reset settings upkeep --dry-run
-wiki reset settings upkeep -y
+wiki reset settings factory -y   # back to company defaults in wiki.toml
 ```
 
 Overview page **body** is never rewritten by settings restore.

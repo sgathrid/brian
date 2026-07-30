@@ -33,12 +33,13 @@ C_CYAN = "\033[36m"
 C_YELLOW = "\033[33m"
 S_CHECK_GREEN = f"{C_GREEN}✓{C_RESET}"
 
-RESTORE_TARGETS = ("upkeep", "identity", "all")
+RESTORE_TARGETS = ("upkeep", "identity", "all", "factory")
 
 TARGET_LABELS = {
     "upkeep": "Upkeep text",
     "identity": "Org identity",
-    "all": "All settings",
+    "all": "All settings (this use case)",
+    "factory": "Factory defaults",
 }
 
 
@@ -174,19 +175,20 @@ def _preview_rows(before: dict[str, object], after: dict[str, object]) -> list[t
 
 
 def _print_preview(
-    target: str,
+    display_target: str,
+    plan_target: str,
     rows: list[tuple[str, str]],
     *,
     dry_run: bool,
     stock_use_case: bool,
 ) -> None:
-    label = TARGET_LABELS.get(target, target)
+    label = TARGET_LABELS.get(display_target, display_target)
     suffix = " · dry run" if dry_run else ""
     print(f"┌  {C_BOLD}wiki reset · user settings{suffix}{C_RESET}")
     print("│")
     print(f"│  {C_BOLD}Target{C_RESET}  {C_CYAN}{label}{C_RESET}  {C_DIM}→ wiki.toml only{C_RESET}")
-    if stock_use_case and target == "all":
-        print(f"│  {C_YELLOW}Also sets use_case = company{C_RESET}")
+    if stock_use_case and plan_target == "all":
+        print(f"│  {C_YELLOW}Forces use_case = company (fresh-checkout defaults){C_RESET}")
     print("│")
     if not rows:
         print(f"│  {C_DIM}Already at stock defaults for this target.{C_RESET}")
@@ -220,19 +222,25 @@ def run_settings_restore(
                 (
                     "upkeep",
                     "Upkeep text",
-                    "stock triggers + instructions (current posture)",
+                    "stock triggers + instructions (keep use case & posture)",
                     True,
                 ),
                 (
                     "identity",
                     "Org identity",
-                    "name, short_name, description",
+                    "name, short_name, description (keep use case)",
                     False,
                 ),
                 (
                     "all",
-                    "All settings",
-                    "identity + selective pack + default rules",
+                    "All settings (this use case)",
+                    "identity + selective pack + default rules — keeps use_case",
+                    False,
+                ),
+                (
+                    "factory",
+                    "Factory defaults",
+                    "use_case=company + company packs + empty rules (fresh checkout)",
                     False,
                 ),
             ],
@@ -242,11 +250,21 @@ def run_settings_restore(
         target = sel.strip().lower()
         print()  # separate menu chrome (tty) from the preview (stdout)
 
-    if target not in RESTORE_TARGETS:
+    display_target = target
+    # factory ≡ all + force company use_case (same as --use-case-stock)
+    if target == "factory":
+        target = "all"
+        stock_use_case = True
+        display_target = "factory"
+    elif stock_use_case and target == "all":
+        display_target = "factory"
+
+    if target not in ("upkeep", "identity", "all"):
         print("wiki reset settings: choose a target.", file=sys.stderr)
         print("  wiki reset settings upkeep     # stock triggers + instructions", file=sys.stderr)
         print("  wiki reset settings identity   # name / short_name / description", file=sys.stderr)
-        print("  wiki reset settings all        # identity + upkeep + default rules", file=sys.stderr)
+        print("  wiki reset settings all        # identity + upkeep + default rules (keeps use_case)", file=sys.stderr)
+        print("  wiki reset settings factory    # company use_case + factory packs (fresh checkout)", file=sys.stderr)
         print("  add --dry-run to preview; -y to confirm non-interactively.", file=sys.stderr)
         print("  page delete remains: wiki reset full|scope|orphans", file=sys.stderr)
         raise SystemExit(2)
@@ -261,7 +279,15 @@ def run_settings_restore(
     after = _planned_snapshot(before, target, repo_root, stock_use_case=stock_use_case)
     rows = _preview_rows(before, after)
 
-    _print_preview(target, rows, dry_run=dry_run, stock_use_case=stock_use_case)
+    _print_preview(
+        display_target,
+        target,
+        rows,
+        dry_run=dry_run,
+        stock_use_case=stock_use_case,
+    )
+
+    apply_token = display_target if display_target in RESTORE_TARGETS else target
 
     if not rows:
         print(f"{S_CHECK_GREEN} Nothing to restore.")
@@ -269,13 +295,18 @@ def run_settings_restore(
 
     if dry_run:
         print(f"{C_DIM}Dry run only — wiki.toml not modified.{C_RESET}")
-        print(f"Apply:  {C_CYAN}wiki reset settings {target} -y{C_RESET}")
+        print(f"Apply:  {C_CYAN}wiki reset settings {apply_token} -y{C_RESET}")
         return True
 
     if not confirmed:
         if not non_interactive and is_tty():
+            confirm_prompt = (
+                "Write factory defaults (use_case=company) to wiki.toml?"
+                if stock_use_case and target == "all"
+                else "Write these stock defaults to wiki.toml?"
+            )
             confirmed = run_confirm(
-                "Write these stock defaults to wiki.toml?",
+                confirm_prompt,
                 default=False,
                 title="wiki reset · user settings",
                 confirm_label="write stock defaults",
@@ -287,8 +318,8 @@ def run_settings_restore(
         if not confirmed:
             print(
                 f"wiki reset settings: needs confirmation.\n"
-                f"  preview:  wiki reset settings {target} --dry-run\n"
-                f"  apply:    wiki reset settings {target} -y",
+                f"  preview:  wiki reset settings {apply_token} --dry-run\n"
+                f"  apply:    wiki reset settings {apply_token} -y",
                 file=sys.stderr,
             )
             raise SystemExit(2)
@@ -325,7 +356,7 @@ def run_settings_restore(
         generate_tags(db, wiki_dir)
         generate_registry(repo_root)
 
-    label = TARGET_LABELS.get(target, target)
+    label = TARGET_LABELS.get(display_target, display_target)
     print()
     print(f"{S_CHECK_GREEN} Restored {C_BOLD}{label}{C_RESET} → {C_CYAN}wiki.toml{C_RESET}")
     print(f"   {C_DIM}pointer updated · pages untouched{C_RESET}")

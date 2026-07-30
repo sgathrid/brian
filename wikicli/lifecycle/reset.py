@@ -39,7 +39,7 @@ def _print_mode_help(*, has_settings: bool) -> None:
             file=sys.stderr,
         )
         print(
-            "  wiki reset settings upkeep|identity|all [--dry-run] [-y]",
+            "  wiki reset settings upkeep|identity|all|factory [--dry-run] [-y]",
             file=sys.stderr,
         )
     print("  add --dry-run to preview any of the above.", file=sys.stderr)

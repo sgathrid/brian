@@ -109,6 +109,49 @@ def test_restore_all_use_case_stock(tmp_path: Path):
     assert data["upkeep"]["instructions"].strip() == stock_i.strip()
 
 
+def test_restore_factory_target(tmp_path: Path):
+    """factory ≡ all --use-case-stock (TTY-facing full defaults)."""
+    toml_path = _seed_custom(tmp_path)
+    # Start from IT so factory must flip use_case, not no-op as "all" would.
+    write_wiki_toml(
+        toml_path,
+        org_name="IT Desk",
+        org_short="IT",
+        org_desc="it desk",
+        use_case="it_service_desk",
+        agent_rules=["people_tracking", "asset_tracking", "security_notice"],
+        company_rel_path="wiki/entities/it-desk-overview.md",
+        proactivity="active",
+        triggers=["CUSTOM IT ONLY"],
+        instructions="HAND EDITED IT",
+    )
+    ok = run_settings_restore(
+        tmp_path, "factory", dry_run=False, non_interactive=True, confirmed=True
+    )
+    assert ok is True
+    with open(toml_path, "rb") as f:
+        data = tomllib.load(f)
+    assert data["wiki"]["use_case"] == "company"
+    assert data["wiki"]["agent_rules"] == []
+    assert data["upkeep"]["proactivity"] == "selective"
+    stock_t, stock_i = _upkeep_for_posture("company", "selective")
+    assert data["upkeep"]["triggers"] == stock_t
+    assert data["upkeep"]["instructions"].strip() == stock_i.strip()
+    assert "HAND EDITED" not in data["upkeep"]["instructions"]
+
+
+def test_restore_factory_dry_run_labels(tmp_path: Path, capsys):
+    _seed_custom(tmp_path)
+    ok = run_settings_restore(
+        tmp_path, "factory", dry_run=True, non_interactive=True, confirmed=False
+    )
+    assert ok is True
+    out = capsys.readouterr().out
+    assert "Factory defaults" in out
+    assert "use_case = company" in out
+    assert "wiki reset settings factory -y" in out
+
+
 def test_restore_dry_run_no_write(tmp_path: Path):
     toml_path = _seed_custom(tmp_path)
     before = toml_path.read_text(encoding="utf-8")

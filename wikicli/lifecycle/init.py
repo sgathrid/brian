@@ -1030,7 +1030,7 @@ def run_init(
     print()
     print(f"   Edit anytime:  open {C_CYAN}wiki.toml{C_RESET}  (agent_rules, name, [upkeep])")
     print(f"   Or re-run:     {C_CYAN}wiki init{C_RESET}  (current values pre-selected)")
-    print(f"   Stock restore: {C_CYAN}wiki reset settings{C_RESET}  (upkeep|identity|all)")
+    print(f"   Stock restore: {C_CYAN}wiki reset settings{C_RESET}  (upkeep|identity|all|factory)")
     print(f"   How to customize: README → {C_BOLD}Customize in plain English{C_RESET}")
     print()
     print(f"   {C_BOLD}Next:{C_RESET} {C_CYAN}wiki install{C_RESET}  → connect Claude, Cursor, Codex, Gemini, …")

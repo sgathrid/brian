@@ -255,13 +255,14 @@ def main():
             "Page modes: full / scope / orphans (delete knowledge pages). "
             "User settings (when available): wiki reset settings — restores stock "
             "wiki.toml packs/names without deleting pages. "
+            "Use 'factory' (or all --use-case-stock) for fresh-checkout company defaults. "
             "Natural-language triggers/instructions live under [upkeep] in wiki.toml."
         ),
     )
     p_reset.add_argument(
         "targets",
         nargs="*",
-        help="Mode: full | scope | orphans | settings [upkeep|identity|all]",
+        help="Mode: full | scope | orphans | settings [upkeep|identity|all|factory]",
     )
     p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
     p_reset.add_argument("--dry-run", action="store_true", help="Preview without making changes")
@@ -279,7 +280,7 @@ def main():
     p_reset.add_argument(
         "--use-case-stock",
         action="store_true",
-        help="With settings all: also force use_case=company",
+        help="With settings all: force use_case=company (same as target 'factory')",
     )
 
 
