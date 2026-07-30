@@ -138,6 +138,26 @@ def test_restore_factory_target(tmp_path: Path):
     assert data["upkeep"]["triggers"] == stock_t
     assert data["upkeep"]["instructions"].strip() == stock_i.strip()
     assert "HAND EDITED" not in data["upkeep"]["instructions"]
+    pointer = (tmp_path / "_templates/agent-pointer.md").read_text(encoding="utf-8")
+    assert "wiki knowledge sources" in pointer
+    assert "needs_revision" in pointer
+
+
+def test_restore_factory_repairs_generated_pointer_when_settings_are_stock(tmp_path: Path):
+    _seed_custom(tmp_path)
+    assert run_settings_restore(
+        tmp_path, "factory", dry_run=False, non_interactive=True, confirmed=True
+    )
+    pointer_path = tmp_path / "_templates/agent-pointer.md"
+    pointer_path.write_text("stale pointer\n", encoding="utf-8")
+
+    assert run_settings_restore(
+        tmp_path, "factory", dry_run=False, non_interactive=True, confirmed=True
+    )
+
+    pointer = pointer_path.read_text(encoding="utf-8")
+    assert "wiki knowledge sources" in pointer
+    assert "needs_revision" in pointer
 
 
 def test_restore_factory_dry_run_labels(tmp_path: Path, capsys):
@@ -148,6 +168,7 @@ def test_restore_factory_dry_run_labels(tmp_path: Path, capsys):
     assert ok is True
     out = capsys.readouterr().out
     assert "Factory defaults" in out
+    assert "wiki.toml + generated defaults" in out
     assert "use_case = company" in out
     assert "wiki reset settings factory -y" in out
 

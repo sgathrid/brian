@@ -201,7 +201,10 @@ def _print_preview(
     suffix = " · dry run" if dry_run else ""
     print(f"┌  {C_BOLD}wiki reset · user settings{suffix}{C_RESET}")
     print("│")
-    print(f"│  {C_BOLD}Target{C_RESET}  {C_CYAN}{label}{C_RESET}  {C_DIM}→ wiki.toml only{C_RESET}")
+    print(
+        f"│  {C_BOLD}Target{C_RESET}  {C_CYAN}{label}{C_RESET}  "
+        f"{C_DIM}→ wiki.toml + generated defaults{C_RESET}"
+    )
     if stock_use_case and plan_target == "all":
         print(f"│  {C_YELLOW}Forces use_case = company (fresh-checkout defaults){C_RESET}")
     print("│")
@@ -293,6 +296,8 @@ def run_settings_restore(
     before = _current_snapshot(existing, repo_root)
     after = _planned_snapshot(before, target, repo_root, stock_use_case=stock_use_case)
     rows = _preview_rows(before, after)
+    if display_target == "factory" and not rows:
+        rows.append(("generated defaults", "refresh stock pointer + indexes"))
 
     _print_preview(
         display_target,

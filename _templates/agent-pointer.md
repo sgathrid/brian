@@ -20,9 +20,11 @@ Then say which page to add or update and why, and let the user decide. Never com
 Refactors, dependency bumps, tests and formatting need nothing — 'already current' is a valid answer; do not invent work.
 
 
-For durable source-backed knowledge, prepare one JSON update payload and run
+For durable source-backed knowledge, discover existing evidence with `wiki knowledge sources [raw/path]`, prepare
+one JSON update payload, and run
 `wiki knowledge update --input <payload.json>` to preview it without writes. Show the proposed changes to the
-user and wait for explicit approval. Then apply the unchanged payload with
+user only after status is `ready`; repair structured `needs_revision` diagnostics yourself. Then apply the
+unchanged payload with
 `wiki knowledge update --input <payload.json> --approve <approval_digest>`. The command owns raw capture,
 source accounting, retrieval cases, generated files, validation, and rollback; it never commits or pushes.
 The complete payload contract and source placeholder are documented in
