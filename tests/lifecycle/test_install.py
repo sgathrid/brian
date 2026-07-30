@@ -531,6 +531,8 @@ class TestPathLinks:
         assert "wiki knowledge query" in text
         assert "wiki knowledge read" in text
         assert "wiki knowledge update" in text
+        assert "wiki knowledge sources" in text
+        assert "needs_revision" in text
         assert "--approve" in text
 
     def test_antigravity_pointer_describes_the_canonical_knowledge_interface(self, fake_home: Path):
@@ -542,6 +544,8 @@ class TestPathLinks:
         assert "wiki knowledge query" in text
         assert "wiki knowledge read" in text
         assert "wiki knowledge update" in text
+        assert "wiki knowledge sources" in text
+        assert "needs_revision" in text
         assert "--approve" in text
 
 

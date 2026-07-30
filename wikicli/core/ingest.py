@@ -9,9 +9,9 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .audit import audit_wiki
 from .generate import generate_backlinks, generate_index, generate_registry, generate_tags
@@ -27,6 +27,21 @@ _CONTENT_FOLDERS = {
 _REQUIRED_FIELDS = {"title", "type", "scope", "summary", "tags", "aliases", "context_keys", "updated", "verified"}
 _SOURCE_REFERENCE = re.compile(r"`(raw/[^`\n]+)`")
 _QUALITY_FLOORS = {"hit@1": 0.65, "hit@3": 0.90, "no_result_accuracy": 0.50}
+_PROVENANCE_HEADING = "## Provenance and status"
+_SOURCE_PLACEHOLDER = "{{SOURCE_PATH}}"
+
+
+@dataclass(frozen=True)
+class KnowledgeDiagnostic:
+    """Structured, repairable validation finding for agents and CLIs."""
+
+    code: str
+    message: str
+    path: str | None = None
+    query: str | None = None
+    expected: str | None = None
+    observed: list[str] = field(default_factory=list)
+    fix: str | None = None
 
 
 @dataclass
@@ -34,6 +49,7 @@ class IngestionReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     facts: list[str] = field(default_factory=list)
+    diagnostics: list[KnowledgeDiagnostic] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -57,14 +73,32 @@ class RetrievalCase:
 
 
 @dataclass(frozen=True)
-class KnowledgeUpdateResult:
-    """Validated outcome of a previewed or applied knowledge update."""
+class KnowledgeUpdateRequest:
+    """Canonical source-backed knowledge update request shared by CLI and MCP."""
 
-    status: str
+    source_title: str
+    page_changes: list[PageChange]
+    retrieval_cases: list[RetrievalCase]
+    source_content: str | None = None
+    existing_source_path: str | None = None
+    source_type: str = "user-confirmed context"
+    approval_digest: str | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeUpdateResult:
+    """Validated outcome of a previewed, revised, or applied knowledge update."""
+
+    status: Literal["needs_revision", "ready", "applied"]
     source_path: str
     pages: list[str]
     facts: list[str]
     approval_digest: str
+    diagnostics: list[KnowledgeDiagnostic] = field(default_factory=list)
+    debt: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def update_knowledge(
@@ -76,45 +110,143 @@ def update_knowledge(
     source_type: str,
     page_changes: list[PageChange],
     retrieval_cases: list[RetrievalCase],
-    confirmed: bool,
+    confirmed: bool | None = None,
     approval_digest: str | None = None,
 ) -> KnowledgeUpdateResult:
-    """Validate a source-backed graph update, then apply it atomically when confirmed.
+    """Validate a source-backed graph update, then apply it atomically when approved.
 
-    New ``source_content`` is written verbatim under ``raw/inbox``. Alternatively, an existing
-    immutable ``raw/...`` file can be referenced without copying it. Page content may use
-    ``{{SOURCE_PATH}}`` so an agent can propose a complete update before the source path is known.
-    Applying requires the digest returned by a preview of the same request and repository state.
+    New ``source_content`` is written verbatim under ``raw/inbox`` unless an existing raw file
+    already contains the exact same bytes, in which case that path is reused. Alternatively, an
+    existing immutable ``raw/...`` file can be referenced without copying it. Page content may use
+    ``{{SOURCE_PATH}}``; missing provenance citations are rendered by the engine. Applying requires
+    the digest returned by a ready preview of the same request and repository state.
+
+    Valid-but-failing proposals return ``status="needs_revision"`` with structured diagnostics
+    instead of raising. Schema-invalid requests still raise ``ValueError``.
     """
+    request = KnowledgeUpdateRequest(
+        source_title=source_title,
+        page_changes=page_changes,
+        retrieval_cases=retrieval_cases,
+        source_content=source_content,
+        existing_source_path=existing_source_path,
+        source_type=source_type,
+        approval_digest=approval_digest,
+    )
+    if confirmed is None:
+        apply = approval_digest is not None
+    else:
+        apply = confirmed
+    return apply_knowledge_update(repo_root, request, apply=apply)
+
+
+def knowledge_update_request_from_dict(
+    payload: dict[str, Any], *, approval_digest: str | None = None
+) -> KnowledgeUpdateRequest:
+    """Parse the canonical update request used by structured transports."""
+    allowed = {
+        "source_title",
+        "source_content",
+        "existing_source_path",
+        "source_type",
+        "page_changes",
+        "retrieval_cases",
+        "approval_digest",
+    }
+    unknown = sorted(set(payload) - allowed)
+    if unknown:
+        raise ValueError(f"unknown update field(s): {', '.join(unknown)}")
+    try:
+        raw_pages = payload["page_changes"]
+        raw_cases = payload["retrieval_cases"]
+        source_title = payload["source_title"]
+    except KeyError as exc:
+        raise ValueError(f"invalid update payload: missing {exc.args[0]}") from exc
+    if not isinstance(source_title, str):
+        raise TypeError("source_title must be a string")
+    if not isinstance(raw_pages, list) or not all(
+        isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("content"), str)
+        for item in raw_pages
+    ):
+        raise TypeError("page_changes must contain objects with string path and content fields")
+    if not isinstance(raw_cases, list) or not all(
+        isinstance(item, dict) and isinstance(item.get("query"), str) and isinstance(item.get("relevance"), dict)
+        for item in raw_cases
+    ):
+        raise TypeError("retrieval_cases must contain objects with query and relevance fields")
+    source_content = payload.get("source_content")
+    existing_source_path = payload.get("existing_source_path")
+    source_type = payload.get("source_type", "user-confirmed context")
+    payload_approval = payload.get("approval_digest")
+    if source_content is not None and not isinstance(source_content, str):
+        raise TypeError("source_content must be a string or null")
+    if existing_source_path is not None and not isinstance(existing_source_path, str):
+        raise TypeError("existing_source_path must be a string or null")
+    if not isinstance(source_type, str):
+        raise TypeError("source_type must be a string")
+    if payload_approval is not None and not isinstance(payload_approval, str):
+        raise TypeError("approval_digest must be a string or null")
+    if approval_digest and payload_approval and approval_digest != payload_approval:
+        raise ValueError("approval digest in --approve does not match approval_digest in the payload")
+    return KnowledgeUpdateRequest(
+        source_title=source_title,
+        source_content=source_content,
+        existing_source_path=existing_source_path,
+        source_type=source_type,
+        page_changes=[PageChange(path=item["path"], content=item["content"]) for item in raw_pages],
+        retrieval_cases=[RetrievalCase(query=item["query"], relevance=item["relevance"]) for item in raw_cases],
+        approval_digest=approval_digest or payload_approval,
+    )
+
+
+def apply_knowledge_update(
+    repo_root: Path,
+    request: KnowledgeUpdateRequest,
+    *,
+    apply: bool | None = None,
+) -> KnowledgeUpdateResult:
+    """Canonical update entrypoint shared by transports."""
     repo_root = repo_root.resolve()
+    source_title = request.source_title
+    source_content = request.source_content
+    existing_source_path = request.existing_source_path
+    source_type = request.source_type
+    approval_digest = request.approval_digest
+    should_apply = approval_digest is not None if apply is None else apply
+
     if not source_title.strip():
         raise ValueError("source_title must be non-empty")
     if bool(source_content) == bool(existing_source_path):
         raise ValueError("provide exactly one of source_content or existing_source_path")
-    if not page_changes:
+    if not request.page_changes:
         raise ValueError("at least one page change is required")
 
+    captured_source = False
     if source_content is not None:
-        captured_source = True
-        source_slug = _filename_slug(source_title)
-        source_kind = _filename_slug(source_type) or "context"
-        digest = hashlib.sha256(source_content.encode("utf-8")).hexdigest()[:12]
-        source_path = f"raw/inbox/{source_kind}-{source_slug}-{digest}.txt"
+        exact = find_exact_raw_source(repo_root, source_content)
+        if exact is not None:
+            source_path = exact
+        else:
+            captured_source = True
+            source_slug = _filename_slug(source_title)
+            source_kind = _filename_slug(source_type) or "context"
+            digest = hashlib.sha256(source_content.encode("utf-8")).hexdigest()[:12]
+            source_path = f"raw/inbox/{source_kind}-{source_slug}-{digest}.txt"
     else:
-        captured_source = False
         source_path = _validate_existing_source(repo_root, existing_source_path or "")
-    normalized_pages = _validate_page_changes(page_changes)
-    normalized_cases = _validate_retrieval_cases(retrieval_cases)
+
+    normalized_pages = _validate_page_changes(request.page_changes)
+    normalized_cases = _validate_retrieval_cases(request.retrieval_cases)
     expected_approval = _approval_digest(
         repo_root,
         source_title=source_title,
-        source_content=source_content,
+        source_content=source_content if captured_source else None,
         existing_source_path=source_path if not captured_source else None,
         source_type=source_type,
         page_changes=normalized_pages,
         retrieval_cases=normalized_cases,
     )
-    if confirmed and approval_digest != expected_approval:
+    if should_apply and approval_digest != expected_approval:
         detail = "missing" if approval_digest is None else "stale or does not match this payload"
         raise ValueError(f"approval digest is {detail}; preview this exact update again")
 
@@ -136,7 +268,8 @@ def update_knowledge(
         for change in normalized_pages:
             page_file = candidate / change.path
             page_file.parent.mkdir(parents=True, exist_ok=True)
-            page_file.write_text(change.content.replace("{{SOURCE_PATH}}", source_path), encoding="utf-8")
+            content = _render_page_content(change.content, source_path)
+            page_file.write_text(content, encoding="utf-8")
             rendered_pages.append(change.path)
 
         registry_path = candidate / "wiki/sources.json"
@@ -176,17 +309,40 @@ def update_knowledge(
         generate_backlinks(db, candidate / "wiki")
         generate_tags(db, candidate / "wiki")
         generate_registry(candidate)
-        report = check_ingestion(candidate, base=None)
+        report = check_ingestion(
+            candidate,
+            base=None,
+            ignore_unrelated_unclassified_raw=True,
+            transaction_sources={source_path},
+            transaction_retrieval_queries={case.query for case in normalized_cases},
+        )
+        debt = [warning for warning in report.warnings if "repository debt" in warning or "unclassified raw" in warning]
         if not report.ok:
-            raise ValueError("knowledge update failed validation:\n" + "\n".join(report.errors))
+            return KnowledgeUpdateResult(
+                status="needs_revision",
+                source_path=source_path,
+                pages=rendered_pages,
+                facts=list(report.facts),
+                approval_digest="",
+                diagnostics=_diagnostics_from_report(report),
+                debt=debt,
+            )
 
-        if not confirmed:
-            return KnowledgeUpdateResult("ready", source_path, rendered_pages, report.facts, expected_approval)
+        if not should_apply:
+            return KnowledgeUpdateResult(
+                status="ready",
+                source_path=source_path,
+                pages=rendered_pages,
+                facts=list(report.facts),
+                approval_digest=expected_approval,
+                diagnostics=[],
+                debt=debt,
+            )
 
         current_approval = _approval_digest(
             repo_root,
             source_title=source_title,
-            source_content=source_content,
+            source_content=source_content if captured_source else None,
             existing_source_path=source_path if not captured_source else None,
             source_type=source_type,
             page_changes=normalized_pages,
@@ -209,7 +365,13 @@ def update_knowledge(
         try:
             for rel in targets:
                 _atomic_write(repo_root / rel, (candidate / rel).read_bytes())
-            applied_report = check_ingestion(repo_root, base=None)
+            applied_report = check_ingestion(
+                repo_root,
+                base=None,
+                ignore_unrelated_unclassified_raw=True,
+                transaction_sources={source_path},
+                transaction_retrieval_queries={case.query for case in normalized_cases},
+            )
             if not applied_report.ok:
                 raise ValueError("applied knowledge update failed validation:\n" + "\n".join(applied_report.errors))
         except Exception:  # Every failed transaction must roll back before re-raising.
@@ -225,7 +387,106 @@ def update_knowledge(
                     _atomic_write(destination, previous)
             raise
 
-    return KnowledgeUpdateResult("applied", source_path, rendered_pages, applied_report.facts, expected_approval)
+    return KnowledgeUpdateResult(
+        status="applied",
+        source_path=source_path,
+        pages=rendered_pages,
+        facts=list(applied_report.facts),
+        approval_digest=expected_approval,
+        diagnostics=[],
+        debt=[w for w in applied_report.warnings if "repository debt" in w or "unclassified raw" in w],
+    )
+
+
+def find_exact_raw_source(repo_root: Path, source_content: str) -> str | None:
+    """Return an existing raw path whose bytes exactly match UTF-8 ``source_content``."""
+    raw_root = repo_root / "raw"
+    if not raw_root.is_dir():
+        return None
+    expected = source_content.encode("utf-8")
+    for path in sorted(raw_root.rglob("*")):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        try:
+            content = path.read_bytes()
+        except OSError:
+            continue
+        if content == expected:
+            return path.relative_to(repo_root).as_posix()
+    return None
+
+
+def _load_source_registry_strict(repo_root: Path) -> dict[str, dict[str, Any]]:
+    report = IngestionReport()
+    registry = _load_source_registry(repo_root / "wiki/sources.json", report)
+    if report.errors:
+        raise ValueError("invalid source registry: " + "; ".join(report.errors))
+    return registry
+
+
+def list_raw_sources(repo_root: Path) -> list[dict[str, Any]]:
+    """List classified and unclassified raw sources for curation discovery."""
+    repo_root = repo_root.resolve()
+    registry = _load_source_registry_strict(repo_root)
+    raw_root = repo_root / "raw"
+    rows: list[dict[str, Any]] = []
+    if raw_root.is_dir():
+        on_disk = sorted(
+            path.relative_to(repo_root).as_posix()
+            for path in raw_root.rglob("*")
+            if path.is_file() and not path.name.startswith(".")
+        )
+    else:
+        on_disk = []
+    seen: set[str] = set()
+    for path in on_disk:
+        seen.add(path)
+        entry = registry.get(path, {})
+        rows.append(
+            {
+                "path": path,
+                "status": entry.get("status", "unclassified"),
+                "pages": list(entry.get("pages", [])) if isinstance(entry.get("pages"), list) else [],
+                "note": entry.get("note", ""),
+                "exists": True,
+            }
+        )
+    for path, entry in sorted(registry.items()):
+        if path in seen:
+            continue
+        rows.append(
+            {
+                "path": path,
+                "status": entry.get("status", "missing"),
+                "pages": list(entry.get("pages", [])) if isinstance(entry.get("pages"), list) else [],
+                "note": entry.get("note", ""),
+                "exists": False,
+            }
+        )
+    return rows
+
+
+def inspect_raw_source(repo_root: Path, source_path: str, *, max_chars: int = 20000) -> dict[str, Any]:
+    """Read one raw source as evidence for curation. Not curated truth."""
+    if type(max_chars) is not int or max_chars < 0:
+        raise ValueError("max_chars must be a non-negative integer")
+    repo_root = repo_root.resolve()
+    rel = _validate_existing_source(repo_root, source_path)
+    raw_bytes = (repo_root / rel).read_bytes()
+    text = raw_bytes.decode("utf-8")
+    registry = _load_source_registry_strict(repo_root)
+    entry = registry.get(rel, {})
+    truncated = len(text) > max_chars
+    return {
+        "path": rel,
+        "status": entry.get("status", "unclassified"),
+        "pages": list(entry.get("pages", [])) if isinstance(entry.get("pages"), list) else [],
+        "note": entry.get("note", ""),
+        "content": text[:max_chars],
+        "truncated": truncated,
+        "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+        "label": "raw evidence — not curated company knowledge",
+    }
 
 
 def _approval_digest(
@@ -311,15 +572,65 @@ def _validate_page_changes(page_changes: list[PageChange]) -> list[PageChange]:
     return normalized
 
 
+def _normalize_relevance_key(key: str) -> str:
+    """Accept stems, wiki paths, or wiki:// URIs; store canonical page stems."""
+    value = key.strip()
+    if value.startswith("wiki://page/"):
+        value = value.removeprefix("wiki://page/")
+    if value.startswith("wiki/"):
+        value = value.removeprefix("wiki/")
+    value = value.removesuffix(".md")
+    if "/" in value:
+        value = value.rsplit("/", 1)[-1]
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", value):
+        raise ValueError(f"invalid retrieval relevance key: {key}")
+    return value
+
+
 def _validate_retrieval_cases(retrieval_cases: list[RetrievalCase]) -> list[RetrievalCase]:
     normalized: list[RetrievalCase] = []
     for case in retrieval_cases:
         if not case.query.strip() or not case.relevance:
             raise ValueError("retrieval cases require a query and at least one relevant page")
-        if any(not stem or not isinstance(grade, int) or grade < 1 for stem, grade in case.relevance.items()):
-            raise ValueError(f"invalid retrieval relevance for query: {case.query}")
-        normalized.append(RetrievalCase(case.query.strip(), dict(case.relevance)))
+        relevance: dict[str, int] = {}
+        for stem, grade in case.relevance.items():
+            if type(grade) is not int or grade < 1:
+                raise ValueError(f"invalid retrieval relevance for query: {case.query}")
+            normalized_stem = _normalize_relevance_key(str(stem))
+            relevance[normalized_stem] = max(relevance.get(normalized_stem, 0), grade)
+        normalized.append(RetrievalCase(case.query.strip(), relevance))
     return normalized
+
+
+def _provenance_section(content: str) -> tuple[int, int] | None:
+    heading = re.search(rf"(?m)^{re.escape(_PROVENANCE_HEADING)}\s*$", content)
+    if heading is None:
+        return None
+    next_heading = re.search(r"(?m)^##\s+", content[heading.end() :])
+    end = heading.end() + next_heading.start() if next_heading else len(content)
+    return heading.end(), end
+
+
+def _provenance_references(content: str) -> set[str]:
+    bounds = _provenance_section(content)
+    if bounds is None:
+        return set()
+    start, end = bounds
+    return set(_SOURCE_REFERENCE.findall(content[start:end]))
+
+
+def _render_page_content(content: str, source_path: str) -> str:
+    """Substitute the source path and ensure its citation is in provenance."""
+    rendered = content.replace(_SOURCE_PLACEHOLDER, source_path)
+    citation = f"`{source_path}`"
+    bounds = _provenance_section(rendered)
+    if bounds is None:
+        return rendered.rstrip() + f"\n\n{_PROVENANCE_HEADING}\n\nCompiled from {citation}.\n"
+    start, end = bounds
+    if source_path in _provenance_references(rendered):
+        return rendered
+    section = rendered[start:end].rstrip() + f"\n\nCompiled from {citation}.\n"
+    return rendered[:start] + section + rendered[end:]
 
 
 def _format_cases(cases: list[dict[str, Any]]) -> str:
@@ -338,11 +649,80 @@ def _atomic_write(path: Path, content: bytes) -> None:
         raise
 
 
+def _diagnostics_from_report(report: IngestionReport) -> list[KnowledgeDiagnostic]:
+    if report.diagnostics:
+        # Always include error-derived diagnostics for codes not already present.
+        existing_messages = {d.message for d in report.diagnostics}
+        diagnostics = list(report.diagnostics)
+        for error in report.errors:
+            if error not in existing_messages:
+                diagnostics.append(_diagnostic_from_error(error))
+        return diagnostics
+    return [_diagnostic_from_error(error) for error in report.errors]
+
+
+def _diagnostic_from_error(error: str) -> KnowledgeDiagnostic:
+    if "raw source is not classified" in error:
+        path = error.split(":", 1)[0]
+        return KnowledgeDiagnostic(
+            code="UNCLASSIFIED_RAW",
+            message=error,
+            path=path,
+            fix="Select this source with existing_source_path or classify it in a dedicated update.",
+        )
+    if "does not cite this source in provenance" in error or "provenance section cites no" in error:
+        return KnowledgeDiagnostic(
+            code="MISSING_PROVENANCE_CITE",
+            message=error,
+            fix="Cite the source path in ## Provenance and status, or rely on engine provenance rendering.",
+        )
+    if "no outbound links" in error:
+        return KnowledgeDiagnostic(
+            code="NO_OUTBOUND_LINKS",
+            message=error,
+            path=error.split(":", 1)[0],
+            fix="Add at least one [[wikilink]] from this page to a related knowledge page.",
+        )
+    if "orphaned" in error:
+        return KnowledgeDiagnostic(
+            code="ORPHAN_PAGE",
+            message=error,
+            path=error.split(":", 1)[0],
+            fix="Update an existing page in the same payload so it links to this page by title.",
+        )
+    if "no novice-language cold-start question targets" in error:
+        stem = error.split(":", 1)[0]
+        return KnowledgeDiagnostic(
+            code="MISSING_RETRIEVAL_CASE",
+            message=error,
+            path=stem,
+            fix=f"Add a retrieval_cases entry whose highest-graded target is '{stem}'.",
+        )
+    if "target missing page" in error:
+        stem = error.rsplit(":", 1)[-1].strip()
+        return KnowledgeDiagnostic(
+            code="UNKNOWN_RETRIEVAL_TARGET",
+            message=error,
+            expected=stem,
+            fix="Point relevance at an existing page stem, wiki path, or wiki:// URI for a page in this update.",
+        )
+    if "cold-start hit@" in error or "no_result_accuracy" in error:
+        return KnowledgeDiagnostic(
+            code="RETRIEVAL_FLOOR",
+            message=error,
+            fix="Inspect per-query ranked hits in diagnostics and strengthen aliases, context_keys, or queries.",
+        )
+    return KnowledgeDiagnostic(code="VALIDATION_ERROR", message=error)
+
+
 def check_ingestion(
     repo_root: Path,
     *,
     base: str | None = "HEAD",
     allow_deletions: bool = False,
+    ignore_unrelated_unclassified_raw: bool = False,
+    transaction_sources: set[str] | None = None,
+    transaction_retrieval_queries: set[str] | None = None,
 ) -> IngestionReport:
     """Validate the current wiki as constructed knowledge, not formatted source copies."""
     repo_root = repo_root.resolve()
@@ -354,9 +734,22 @@ def check_ingestion(
     _check_git_changes(repo_root, base, allow_deletions, report)
     registry = _load_source_registry(wiki_dir / "sources.json", report)
     _check_pages(repo_root, db, pages, registry, report)
-    _check_sources(repo_root, pages, registry, report)
+    _check_sources(
+        repo_root,
+        pages,
+        registry,
+        report,
+        ignore_unrelated_unclassified_raw=ignore_unrelated_unclassified_raw,
+        transaction_sources=transaction_sources or set(),
+    )
     _check_graph(db, pages, report)
-    _check_questions(repo_root, db, pages, report)
+    _check_questions(
+        repo_root,
+        db,
+        pages,
+        report,
+        transaction_retrieval_queries=transaction_retrieval_queries or set(),
+    )
     _check_generated_files(repo_root, report)
 
     report.facts.insert(0, f"{len(pages)} knowledge pages; {len(registry)} registered sources")
@@ -422,7 +815,7 @@ def _check_pages(
         page_type = page.frontmatter.get("type")
         if folder not in _CONTENT_FOLDERS or page_type not in _CONTENT_FOLDERS.get(folder, set()):
             report.errors.append(f"{rel}: type {page_type!r} does not belong in wiki/{folder}/")
-        if "## Provenance and status" not in page.body:
+        if _provenance_section(page.body) is None:
             report.errors.append(f"{rel}: missing '## Provenance and status' section")
         if registry and rel not in mapped_pages:
             report.errors.append(f"{rel}: not mapped from any source in sources.json")
@@ -439,6 +832,9 @@ def _check_sources(
     pages: list[WikiPage],
     registry: dict[str, dict[str, Any]],
     report: IngestionReport,
+    *,
+    ignore_unrelated_unclassified_raw: bool = False,
+    transaction_sources: set[str] | None = None,
 ) -> None:
     raw_dir = repo_root / "raw"
     on_disk = {
@@ -447,9 +843,15 @@ def _check_sources(
         if path.is_file() and not path.name.startswith(".")
     }
     registered = set(registry)
+    touched = set(transaction_sources or ())
     if on_disk:
         for source in sorted(on_disk - registered):
-            report.errors.append(f"{source}: raw source is not classified in sources.json")
+            if ignore_unrelated_unclassified_raw and source not in touched:
+                report.warnings.append(
+                    f"{source}: unclassified raw source left as repository debt (unchanged by this update)"
+                )
+            else:
+                report.errors.append(f"{source}: raw source is not classified in sources.json")
         for source in sorted(registered - on_disk):
             report.errors.append(f"{source}: registered source does not exist locally")
     else:
@@ -459,7 +861,7 @@ def _check_sources(
     referenced_sources: set[str] = set()
     multi_source_synthesis = False
     for rel, page in page_by_path.items():
-        references = set(_SOURCE_REFERENCE.findall(page.body))
+        references = _provenance_references(page.body)
         referenced_sources.update(references)
         if page.frontmatter.get("type") == "synthesis" and len(references) >= 2:
             multi_source_synthesis = True
@@ -487,7 +889,7 @@ def _check_sources(
                 mapped_page = page_by_path.get(rel)
                 if mapped_page is None:
                     report.errors.append(f"{source}: mapped page does not exist: {rel}")
-                elif source not in _SOURCE_REFERENCE.findall(mapped_page.body):
+                elif source not in _provenance_references(mapped_page.body):
                     report.errors.append(f"{source}: {rel} does not cite this source in provenance")
         elif mapped:
             report.errors.append(f"{source}: {status} sources must not map to knowledge pages")
@@ -518,7 +920,14 @@ def _check_graph(db: WikiDatabase, pages: list[WikiPage], report: IngestionRepor
     report.facts.append(f"{sum(incoming.values())} resolved relationships")
 
 
-def _check_questions(repo_root: Path, db: WikiDatabase, pages: list[WikiPage], report: IngestionReport) -> None:
+def _check_questions(
+    repo_root: Path,
+    db: WikiDatabase,
+    pages: list[WikiPage],
+    report: IngestionReport,
+    *,
+    transaction_retrieval_queries: set[str] | None = None,
+) -> None:
     path = repo_root / "benchmarks" / "cold_start_cases.json"
     if not path.is_file():
         report.warnings.append(
@@ -534,26 +943,66 @@ def _check_questions(repo_root: Path, db: WikiDatabase, pages: list[WikiPage], r
         report.errors.append("cold_start_cases.json must contain at least one question")
         return
 
-    resolver = ContextResolver(db)
-    covered: set[str] = set()
-    hit_at_one: list[bool] = []
-    hit_at_three: list[bool] = []
-    no_result: list[bool] = []
+    normalized_cases: list[tuple[str, dict[str, int]]] = []
+    benchmark_errors: list[str] = []
     for case in cases:
         if (
             not isinstance(case, dict)
             or not isinstance(case.get("query"), str)
             or not isinstance(case.get("relevance"), dict)
         ):
-            report.errors.append("every cold-start case needs a query string and relevance object")
-            return
+            benchmark_errors.append("every cold-start case needs a query string and relevance object")
+            continue
+        query = case["query"]
         relevance = case["relevance"]
-        covered.update(str(stem) for stem in relevance)
-        results = [page.stem for page in resolver.find_keywords(case["query"], limit=5)]
-        if relevance:
-            target = max(relevance, key=relevance.__getitem__)
+        normalized_relevance: dict[str, int] = {}
+        valid_case = True
+        for key, grade in relevance.items():
+            if type(grade) is not int or grade < 1:
+                benchmark_errors.append(f"{query}: relevance grade for {key} must be a positive integer")
+                valid_case = False
+                continue
+            try:
+                stem = _normalize_relevance_key(key)
+            except ValueError as exc:
+                benchmark_errors.append(f"{query}: {exc}")
+                valid_case = False
+                continue
+            normalized_relevance[stem] = max(normalized_relevance.get(stem, 0), grade)
+        if valid_case:
+            normalized_cases.append((query, normalized_relevance))
+    if benchmark_errors:
+        report.errors.extend(benchmark_errors)
+        return
+
+    resolver = ContextResolver(db)
+    covered: set[str] = set()
+    hit_at_one: list[bool] = []
+    hit_at_three: list[bool] = []
+    no_result: list[bool] = []
+    nonblocking_misses: list[KnowledgeDiagnostic] = []
+    for query, normalized_relevance in normalized_cases:
+        covered.update(normalized_relevance)
+        results = [page.stem for page in resolver.find_keywords(query, limit=5)]
+        if normalized_relevance:
+            target = max(normalized_relevance, key=normalized_relevance.__getitem__)
             hit_at_one.append(results[:1] == [target])
             hit_at_three.append(target in results[:3])
+            if target not in results[:3]:
+                message = f"query did not rank target in top 3: {query}"
+                diagnostic = KnowledgeDiagnostic(
+                    code="RETRIEVAL_MISS",
+                    message=message,
+                    query=query,
+                    expected=target,
+                    observed=results,
+                    fix="Strengthen page aliases/context_keys or rewrite the novice-language query.",
+                )
+                if query in (transaction_retrieval_queries or set()):
+                    report.diagnostics.append(diagnostic)
+                    report.errors.append(message)
+                else:
+                    nonblocking_misses.append(diagnostic)
         else:
             no_result.append(not results)
 
@@ -568,9 +1017,20 @@ def _check_questions(repo_root: Path, db: WikiDatabase, pages: list[WikiPage], r
         "hit@3": sum(hit_at_three) / len(hit_at_three) if hit_at_three else 0.0,
         "no_result_accuracy": sum(no_result) / len(no_result) if no_result else 1.0,
     }
+    if metrics["hit@3"] < _QUALITY_FLOORS["hit@3"]:
+        report.diagnostics.extend(nonblocking_misses)
     for name, floor in _QUALITY_FLOORS.items():
         if metrics[name] < floor:
             report.errors.append(f"cold-start {name} {metrics[name]:.1%} is below the {floor:.0%} floor")
+            report.diagnostics.append(
+                KnowledgeDiagnostic(
+                    code="RETRIEVAL_FLOOR",
+                    message=f"cold-start {name} {metrics[name]:.1%} is below the {floor:.0%} floor",
+                    expected=f">={floor:.0%}",
+                    observed=[f"{name}={metrics[name]:.1%}"],
+                    fix="Review RETRIEVAL_MISS diagnostics for ranked hits on failing queries.",
+                )
+            )
     report.facts.append("cold-start " + ", ".join(f"{name} {value:.1%}" for name, value in metrics.items()))
 
 

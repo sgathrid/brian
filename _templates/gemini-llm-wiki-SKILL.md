@@ -32,8 +32,10 @@ The wiki CLI is on your PATH (run the installer if not). Locate the repo with `w
 
 3. **Ingest Source Material**:
    - **Discover** existing coverage with `wiki knowledge query` and `wiki knowledge read`.
+   - **Inspect evidence** with `wiki knowledge sources [raw/path]`; prefer an existing source path.
    - **Plan** atomic page updates, syntheses, links, claim dispositions, and novice-language questions.
    - **Preview** one complete JSON payload with `wiki knowledge update --input <payload.json>`.
+   - **Repair** structured `needs_revision` diagnostics and preview again until status is `ready`.
    - **Approve**: show the plan to the user and wait for explicit approval.
    - **Apply** the unchanged payload with
      `wiki knowledge update --input <payload.json> --approve <approval_digest>`.

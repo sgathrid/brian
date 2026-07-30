@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 from ..core.generate import generate_backlinks, generate_index, generate_registry, generate_tags
 from ..core.page import WikiDatabase
@@ -43,6 +44,20 @@ TARGET_LABELS = {
 }
 
 
+class SettingsSnapshot(TypedDict):
+    """Normalized settings consumed by preview and apply paths."""
+
+    use_case: str
+    name: str
+    short_name: str
+    description: str
+    agent_rules: list[str]
+    company_rel_path: str
+    proactivity: str
+    triggers: list[str]
+    instructions: str
+
+
 def _repo_base_name(repo_root: Path) -> str:
     return repo_root.name.replace("-", " ").replace("_", " ").title() or "Organization"
 
@@ -54,7 +69,7 @@ def _clip(text: str, width: int = 48) -> str:
     return text[: width - 1] + "…"
 
 
-def _current_snapshot(existing: dict, repo_root: Path) -> dict[str, object]:
+def _current_snapshot(existing: dict, repo_root: Path) -> SettingsSnapshot:
     wiki = existing.get("wiki", {}) if isinstance(existing.get("wiki"), dict) else {}
     paths = existing.get("paths", {}) if isinstance(existing.get("paths"), dict) else {}
     upkeep = existing.get("upkeep", {}) if isinstance(existing.get("upkeep"), dict) else {}
@@ -95,13 +110,13 @@ def _current_snapshot(existing: dict, repo_root: Path) -> dict[str, object]:
 
 
 def _planned_snapshot(
-    current: dict[str, object],
+    current: SettingsSnapshot,
     target: str,
     repo_root: Path,
     *,
     stock_use_case: bool,
-) -> dict[str, object]:
-    planned = dict(current)
+) -> SettingsSnapshot:
+    planned = current.copy()
     use_case = str(current["use_case"])
     if stock_use_case and target == "all":
         use_case = "company"
@@ -139,7 +154,7 @@ def _planned_snapshot(
     return planned
 
 
-def _preview_rows(before: dict[str, object], after: dict[str, object]) -> list[tuple[str, str]]:
+def _preview_rows(before: SettingsSnapshot, after: SettingsSnapshot) -> list[tuple[str, str]]:
     """Return (label, change summary) rows for fields that differ."""
     rows: list[tuple[str, str]] = []
 
@@ -156,15 +171,15 @@ def _preview_rows(before: dict[str, object], after: dict[str, object]) -> list[t
     if before.get("description") != after.get("description"):
         rows.append(("description", "rewritten to use-case default"))
 
-    b_rules = list(before.get("agent_rules") or [])  # type: ignore[arg-type]
-    a_rules = list(after.get("agent_rules") or [])  # type: ignore[arg-type]
+    b_rules = before["agent_rules"]
+    a_rules = after["agent_rules"]
     if b_rules != a_rules:
         rows.append(("agent_rules", f"{len(b_rules)} selected  →  {len(a_rules)} defaults"))
 
     add_scalar("proactivity", "proactivity")
 
-    b_t = list(before.get("triggers") or [])  # type: ignore[arg-type]
-    a_t = list(after.get("triggers") or [])  # type: ignore[arg-type]
+    b_t = before["triggers"]
+    a_t = after["triggers"]
     if b_t != a_t:
         rows.append(("triggers", f"{len(b_t)} custom  →  {len(a_t)} stock"))
 
@@ -330,10 +345,10 @@ def run_settings_restore(
         org_short=str(after["short_name"]),
         org_desc=str(after["description"]),
         use_case=str(after["use_case"]),
-        agent_rules=list(after["agent_rules"]),  # type: ignore[arg-type]
+        agent_rules=after["agent_rules"],
         company_rel_path=str(after["company_rel_path"]),
         proactivity=str(after["proactivity"]),
-        triggers=list(after["triggers"]),  # type: ignore[arg-type]
+        triggers=after["triggers"],
         instructions=str(after["instructions"]),
     )
 
@@ -342,8 +357,8 @@ def run_settings_restore(
         str(after["name"]),
         str(after["short_name"]),
         str(after["use_case"]),
-        list(after["agent_rules"]),  # type: ignore[arg-type]
-        upkeep_triggers=list(after["triggers"]),  # type: ignore[arg-type]
+        after["agent_rules"],
+        upkeep_triggers=after["triggers"],
         upkeep_instructions=str(after["instructions"]),
         upkeep_proactivity=str(after["proactivity"]),
     )

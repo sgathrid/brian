@@ -464,12 +464,24 @@ Agents use these on your behalf; handy for debugging:
 | `wiki context "$PWD"` | Rank pages for a directory or task |
 | `wiki knowledge query "<question>"` | Ranked JSON over curated pages |
 | `wiki knowledge read "<path>"` | Read one page as structured JSON |
+| `wiki knowledge sources [raw/path]` | List source inventory or inspect one source as curation evidence |
 | `wiki knowledge update --input <file.json>` | Preview a governed update |
 | `wiki knowledge update --input <file.json> --approve <digest>` | Apply after approval |
 | `wiki sync` | Fetch + fast-forward clean checkouts |
 | `wiki root` | Print the Brian repo path |
 
-Updates always preview first, need an approval digest, track sources, and never commit or push.
+`wiki knowledge sources` provides the same evidence inventory and bounded inspection available through MCP.
+Updates always preview first: the agent repairs structured `needs_revision` diagnostics, presents a `ready`
+proposal for approval, and applies only the exact payload bound to that approval digest. Existing `raw/` files
+can be selected directly, byte-identical new content reuses them automatically, and the engine never commits or
+pushes. For `wiki knowledge update`, exit `0` means ready/applied, `3` means repairable `needs_revision`, `2`
+means an invalid request or approval, and `1` means an operational failure; every response remains structured JSON.
+
+Claude Desktop exposes the same workflow through five MCP tools: query and read curated knowledge, list and
+inspect raw-source evidence, then preview or apply one governed update. Raw evidence is deliberately kept
+separate from curated answers until an approved update passes validation. The canonical MCP flow omits the
+deprecated `confirmed` compatibility field: no digest previews; the digest from a `ready` preview applies the
+exact unchanged payload after approval.
 
 </details>
 

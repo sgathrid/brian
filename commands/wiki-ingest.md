@@ -5,7 +5,8 @@ The output is knowledge, not a Markdown copy of the source. Never edit governed 
 ## 1. Inventory and discover
 
 - Resolve `WIKI_ROOT` with `wiki root`; never hardcode it.
-- Confirm every supplied source exists under `raw/` and do not modify it.
+- Run `wiki knowledge sources`; inspect a likely existing source with `wiki knowledge sources "raw/..."`.
+- Prefer the exact existing `raw/...` path. Use `source_content` only for new conversation evidence.
 - Extract the entities, projects, concepts, decisions, and questions in the source.
 - Search with several plain-language questions using `wiki knowledge query "<question>"`.
 - Read the closest results with `wiki knowledge read "<path>"`. Prefer updating an existing node over creating a synonym.
@@ -53,8 +54,9 @@ verified: true|false
 ```
 
 - Link related nodes inline with `[[Wikilinks]]` and explain the relationship in prose.
-- Add `## Provenance and status`; use `` `{{SOURCE_PATH}}` `` for this update's exact source.
+- Add `## Provenance and status`; `` `{{SOURCE_PATH}}` `` is supported, and the engine ensures the exact citation is in this section.
 - Include at least one realistic novice-language retrieval case for every new page.
+- Retrieval relevance accepts a stem, `wiki/...` path, or `wiki://page/...` URI.
 - Do not retain personal contact details, boilerplate, or formatting noise unless they are themselves durable knowledge.
 
 ## 5. Preview, approve, and apply
@@ -64,14 +66,17 @@ wiki knowledge update --input <payload.json>
 ```
 
 The preview performs every source-accounting, provenance, connectivity, retrieval, generation, and audit gate
-without persistent writes. Present its complete plan and facts to the user. After explicit approval, apply the
-unchanged payload with the returned digest:
+without persistent writes. If it returns `needs_revision`, repair its structured diagnostics and preview again;
+do not ask the user to edit registries or rename files. Every retrieval case added by this transaction must rank
+its primary target in the top three. Present a `ready` plan to the user. After explicit approval, apply the unchanged
+payload with the returned digest:
 
 ```bash
 wiki knowledge update --input <payload.json> --approve <approval_digest>
 ```
 
 A changed payload or governed repository state invalidates approval. Failed applies roll back completely.
+Unrelated unclassified raw files are reported as repository debt and do not block a valid transaction.
 
 ## 6. Persist deliberately
 
