@@ -7,9 +7,7 @@ from pathlib import Path
 from wikicli.lifecycle.status import _agent_behavior_lines, run_status
 
 
-def test_agent_behavior_lines_empty_catalog_does_not_claim_rules(
-    tmp_path: Path, monkeypatch
-):
+def test_agent_behavior_lines_empty_catalog_does_not_claim_rules(tmp_path: Path, monkeypatch):
     (tmp_path / "wiki.toml").write_text(
         """
 [wiki]
@@ -24,9 +22,7 @@ instructions = \"\"\"Ask first.\"\"\"
 """,
         encoding="utf-8",
     )
-    monkeypatch.setattr(
-        "wikicli.lifecycle.status.load_agent_rule_catalog", dict
-    )
+    monkeypatch.setattr("wikicli.lifecycle.status.load_agent_rule_catalog", dict)
     lines = _agent_behavior_lines(tmp_path)
     joined = "\n".join(lines)
     assert "What agents will do" in joined
@@ -38,9 +34,7 @@ instructions = \"\"\"Ask first.\"\"\"
     assert "label only" in joined
 
 
-def test_agent_behavior_lines_with_catalog_shows_labels(
-    tmp_path: Path, monkeypatch
-):
+def test_agent_behavior_lines_with_catalog_shows_labels(tmp_path: Path, monkeypatch):
     (tmp_path / "wiki.toml").write_text(
         """
 [wiki]
@@ -92,8 +86,7 @@ triggers = ["Ask"]
 def test_run_status_prints_behavior_card(tmp_path: Path, capsys):
     (tmp_path / "wiki").mkdir()
     (tmp_path / "wiki.toml").write_text(
-        '[wiki]\nname = "S"\nshort_name = "S Wiki"\n\n'
-        '[upkeep]\nproactivity = "silent"\ntriggers = ["Ask"]\n',
+        '[wiki]\nname = "S"\nshort_name = "S Wiki"\n\n[upkeep]\nproactivity = "silent"\ntriggers = ["Ask"]\n',
         encoding="utf-8",
     )
     run_status(tmp_path)

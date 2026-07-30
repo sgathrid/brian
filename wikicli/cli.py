@@ -10,13 +10,13 @@ from typing import Any
 from .core.audit import audit_wiki
 from .core.generate import generate_backlinks, generate_index, generate_registry, generate_tags
 from .core.ingest import (
-    apply_knowledge_update,
     check_ingestion,
     inspect_raw_source,
     knowledge_update_request_from_dict,
     list_raw_sources,
+    update_knowledge,
 )
-from .core.knowledge import query_company_knowledge, read_company_page
+from .core.knowledge import query_knowledge, read_page
 from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
 from .lifecycle.hook import run_session_start_hook
@@ -53,11 +53,7 @@ def _load_update_payload(path: str) -> dict[str, Any]:
 
 def _run_knowledge_update(repo_root: Path, payload: dict[str, Any], approval_digest: str | None) -> object:
     request = knowledge_update_request_from_dict(payload, approval_digest=approval_digest)
-    return apply_knowledge_update(
-        repo_root,
-        request,
-        apply=request.approval_digest is not None,
-    )
+    return update_knowledge(repo_root, request)
 
 
 def main():
@@ -122,7 +118,10 @@ def main():
     p_knowledge_query.add_argument("question", help="Natural-language company question")
     p_knowledge_query.add_argument("--limit", type=int, default=5, help="Maximum results (1-10)")
     p_knowledge_read = knowledge_commands.add_parser("read", help="Read one curated company page as JSON")
-    p_knowledge_read.add_argument("path", help="Path or wiki:// URI returned by query")
+    p_knowledge_read.add_argument(
+        "path",
+        help="Page ref: wiki/... path, wiki:// URI, title, [[Wikilink]], or stem from query",
+    )
     p_knowledge_update = knowledge_commands.add_parser(
         "update", help="Preview or apply one source-backed knowledge update from JSON"
     )
@@ -347,10 +346,10 @@ def main():
     elif args.subcommand == "knowledge":
         try:
             if args.knowledge_command == "query":
-                result = query_company_knowledge(repo_root, args.question, args.limit)
+                result = query_knowledge(repo_root, args.question, args.limit)
                 _print_json(asdict(result))
             elif args.knowledge_command == "read":
-                result = read_company_page(repo_root, args.path)
+                result = read_page(repo_root, args.path)
                 _print_json(asdict(result))
             elif args.knowledge_command == "sources":
                 if args.path:

@@ -9,7 +9,7 @@ The output is knowledge, not a Markdown copy of the source. Never edit governed 
 - Prefer the exact existing `raw/...` path. Use `source_content` only for new conversation evidence.
 - Extract the entities, projects, concepts, decisions, and questions in the source.
 - Search with several plain-language questions using `wiki knowledge query "<question>"`.
-- Read the closest results with `wiki knowledge read "<path>"`. Prefer updating an existing node over creating a synonym.
+- Read the closest results with `wiki knowledge read "<ref>"` (path, URI, title, `[[Wikilink]]`, or stem). Prefer updating an existing node over creating a synonym.
 
 ## 2. Plan the knowledge operations before writing
 

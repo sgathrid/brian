@@ -33,7 +33,7 @@ def test_query_loads_only_curated_wiki_and_returns_typed_hits(mcp_repo: Path) ->
     _page(mcp_repo / "wiki/concepts/needle.md", "Needle", "A uniquely searchable safety needle.")
     _page(mcp_repo / "outside.md", "Outside", "uniquely searchable safety needle")
 
-    result = server.query_company_knowledge("safety needle")
+    result = server.query_knowledge("safety needle")
 
     assert result.no_results is False
     assert result.hits[0].title == "Needle"
@@ -46,20 +46,28 @@ def test_query_formats_literal_matches(mcp_repo: Path, monkeypatch: pytest.Monke
     _page(mcp_repo / "wiki/concepts/literal.md", "Literal", "Exact phrase lives here.")
     monkeypatch.setattr(knowledge, "search_keywords", lambda *_args, **_kwargs: [])
 
-    result = server.query_company_knowledge("Exact phrase")
+    result = server.query_knowledge("Exact phrase")
 
     assert result.hits[0].summary == "Exact phrase lives here."
     assert result.hits[0].match_reasons[0].startswith("literal line ")
 
 
-def test_read_accepts_canonical_path_and_resource_uri(mcp_repo: Path) -> None:
+def test_read_accepts_supported_page_references(mcp_repo: Path) -> None:
     _page(mcp_repo / "wiki/concepts/needle.md", "Needle", "Curated content.")
 
-    by_path = server.read_company_page("wiki/concepts/needle.md")
-    by_uri = server.read_company_page("wiki://page/concepts/needle")
+    results = [
+        server.read_page(ref)
+        for ref in (
+            "wiki/concepts/needle.md",
+            "wiki://page/concepts/needle",
+            "Needle",
+            "[[Needle]]",
+            "needle",
+        )
+    ]
 
-    assert by_path == by_uri
-    assert "Curated content." in by_path.content
+    assert all(result == results[0] for result in results)
+    assert "Curated content." in results[0].content
 
 
 @pytest.mark.parametrize("path", ["../outside", "wiki/../outside", "raw/secret", "/tmp/outside"])
@@ -67,40 +75,40 @@ def test_read_rejects_paths_outside_curated_wiki(mcp_repo: Path, path: str) -> N
     (mcp_repo / "outside.md").write_text("secret", encoding="utf-8")
 
     with pytest.raises((ValueError, FileNotFoundError)):
-        server.read_company_page(path)
+        server.read_page(path)
 
 
 def test_mcp_exposes_typed_tools_with_behavior_annotations() -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
 
     assert set(tools) == {
-        "query_company_knowledge",
-        "read_company_page",
-        "list_company_sources",
-        "inspect_company_source",
-        "apply_knowledge_update",
+        "query_knowledge",
+        "read_page",
+        "list_sources",
+        "inspect_source",
+        "update_knowledge",
     }
-    assert tools["query_company_knowledge"].annotations.readOnlyHint is True
-    assert tools["read_company_page"].annotations.readOnlyHint is True
-    assert tools["list_company_sources"].annotations.readOnlyHint is True
-    assert tools["inspect_company_source"].annotations.readOnlyHint is True
-    assert tools["apply_knowledge_update"].annotations.destructiveHint is True
-    assert tools["apply_knowledge_update"].annotations.idempotentHint is False
-    assert "hits" in tools["query_company_knowledge"].outputSchema["properties"]
-    update_tool = tools["apply_knowledge_update"]
+    assert tools["query_knowledge"].annotations.readOnlyHint is True
+    assert tools["read_page"].annotations.readOnlyHint is True
+    assert tools["list_sources"].annotations.readOnlyHint is True
+    assert tools["inspect_source"].annotations.readOnlyHint is True
+    assert tools["update_knowledge"].annotations.destructiveHint is True
+    assert tools["update_knowledge"].annotations.idempotentHint is False
+    assert "hits" in tools["query_knowledge"].outputSchema["properties"]
+    update_tool = tools["update_knowledge"]
     update_properties = update_tool.inputSchema["properties"]
     assert update_properties["page_changes"]["items"]["$ref"] == "#/$defs/PageChange"
     assert "source_content" in update_properties
     assert "existing_source_path" in update_properties
-    assert "Deprecated compatibility flag" in update_properties["confirmed"]["description"]
+    assert "confirmed" not in update_properties
     assert "status=ready" in update_properties["approval_digest"]["description"]
-    assert "omit confirmed and approval_digest to preview" in update_tool.description
+    assert "Omit approval_digest to preview" in update_tool.description
     assert update_tool.outputSchema["properties"]["status"]["enum"] == ["needs_revision", "ready", "applied"]
 
 
 def test_invalid_mcp_read_is_reported_as_tool_error(mcp_repo: Path) -> None:
-    with pytest.raises(ToolError, match="invalid company wiki path"):
-        asyncio.run(server.mcp.call_tool("read_company_page", {"path": "../outside"}))
+    with pytest.raises(ToolError, match="invalid knowledge page reference"):
+        asyncio.run(server.mcp.call_tool("read_page", {"ref": "../outside"}))
 
 
 def test_mcp_rejects_out_of_range_source_inspection_limit(mcp_repo: Path) -> None:
@@ -108,7 +116,7 @@ def test_mcp_rejects_out_of_range_source_inspection_limit(mcp_repo: Path) -> Non
     (mcp_repo / "raw/source.md").write_text("evidence", encoding="utf-8")
 
     with pytest.raises(ToolError, match="max_chars"):
-        asyncio.run(server.mcp.call_tool("inspect_company_source", {"path": "raw/source.md", "max_chars": -1}))
+        asyncio.run(server.mcp.call_tool("inspect_source", {"path": "raw/source.md", "max_chars": -1}))
 
 
 def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,11 +126,11 @@ def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPat
         captured.update(root=root, request=request, apply=apply)
         return KnowledgeUpdateResult("ready", "raw/one.md", ["wiki/concepts/one.md"], ["validated"], "digest")
 
-    monkeypatch.setattr(server, "apply_update_request", fake_update)
+    monkeypatch.setattr(server, "run_knowledge_update", fake_update)
     changes = [PageChange("wiki/concepts/one.md", "complete page")]
     cases = [RetrievalCase("what is one", {"one": 3})]
 
-    result = server.apply_knowledge_update(
+    result = server.update_knowledge(
         "Existing evidence",
         changes,
         cases,
@@ -136,45 +144,14 @@ def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPat
     assert captured["apply"] is None
 
 
-def test_update_tool_keeps_confirmed_true_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    def fake_update(root: Path, request: object, *, apply: bool | None = None) -> KnowledgeUpdateResult:
-        captured.update(request=request, apply=apply)
-        return KnowledgeUpdateResult("applied", "raw/one.md", ["wiki/concepts/one.md"], ["validated"], "digest")
-
-    monkeypatch.setattr(server, "apply_update_request", fake_update)
-    server.apply_knowledge_update(
-        "Existing evidence",
-        [PageChange("wiki/concepts/one.md", "complete page")],
-        [RetrievalCase("what is one", {"one": 3})],
-        existing_source_path="raw/one.md",
-        confirmed=True,
-        approval_digest="digest",
-    )
-
-    assert captured["request"].approval_digest == "digest"
-    assert captured["apply"] is True
-
-
-@pytest.mark.parametrize(
-    ("confirmed", "approval_digest", "message"),
-    [
-        (True, None, "confirmed=true requires approval_digest from a status=ready preview"),
-        (False, "digest", "confirmed=false cannot be combined with approval_digest"),
-    ],
-)
-def test_update_tool_rejects_ambiguous_compatibility_inputs(
-    confirmed: bool,
-    approval_digest: str | None,
-    message: str,
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        server.apply_knowledge_update(
-            "Existing evidence",
-            [PageChange("wiki/concepts/one.md", "complete page")],
-            [RetrievalCase("what is one", {"one": 3})],
-            existing_source_path="raw/one.md",
-            confirmed=confirmed,
-            approval_digest=approval_digest,
-        )
+def test_server_instructions_require_proactive_company_grounding() -> None:
+    instructions = " ".join(server.SERVER_INSTRUCTIONS.split())
+    assert "without waiting for the user" in instructions
+    assert "when the requested specificity or freshness exceeds the available evidence" in instructions
+    assert "when a citation is requested" in instructions
+    assert "partner, legal, and financial status" in instructions
+    assert "answers that will be acted on or repeated externally" in instructions
+    assert "verify the owning record or repository before consequential use" in instructions
+    assert "Otherwise, do not query ritualistically" in instructions
+    assert "follow wikilinks until the evidence is sufficient" in instructions
+    assert "If the curated pages do not support an answer, say so" in instructions

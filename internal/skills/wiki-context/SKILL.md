@@ -18,9 +18,12 @@ Maps the current repo / a path / free task text (e.g. "reviewing an SBIR pitch o
 ## Query and read
 
 ```bash
-wiki knowledge query "<question>"             # deterministic JSON with ranked curated pages
-wiki knowledge read "wiki/projects/example.md" # deterministic JSON for one returned page
+wiki knowledge query "<question>"   # deterministic JSON with ranked curated pages
+wiki knowledge read "<ref>"         # path, wiki:// URI, title, [[Wikilink]], or stem
 ```
+
+CLI and MCP share one engine. Prefer `wiki knowledge …` when the host has no MCP; the five MCP tools
+(`query_knowledge`, `read_page`, `list_sources`, `inspect_source`, `update_knowledge`) return the same JSON.
 
 Read only the pages needed to answer. Cite them as `[[Page Title]]`. A query with `"no_results": true`
 means the curated wiki does not support the question; do not fill the gap from incidental repository text.
@@ -30,8 +33,8 @@ means the curated wiki does not support the question; do not fill the gap from i
 When a source or conversation contains durable company knowledge:
 
 1. Query and read existing coverage before proposing changes.
-2. Discover evidence with `wiki knowledge sources` (or MCP `list_company_sources` /
-   `inspect_company_source`). Prefer an existing `raw/...` path when the file is already local.
+2. Discover evidence with `wiki knowledge sources` (or MCP `list_sources` /
+   `inspect_source`). Prefer an existing `raw/...` path when the file is already local.
 3. Build one JSON payload containing `source_title`, exactly one of `source_content` or
    `existing_source_path`, complete `page_changes`, and `retrieval_cases`.
 4. Preview without writing: `wiki knowledge update --input <payload.json>`.

@@ -14,6 +14,8 @@ from .page import WikiDatabase, WikiPage
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _QUERY_SCAFFOLDING = (
+    re.compile(r"\bwho(?:\s+is|'s|s)\b", re.IGNORECASE),
+    re.compile(r"\b(?:my|our|the\s+(?:company|team)'s)\b", re.IGNORECASE),
     re.compile(r"\bin plain english\b", re.IGNORECASE),
     re.compile(r"\btell me about\b", re.IGNORECASE),
     re.compile(r"\bi know nothing about\b", re.IGNORECASE),
@@ -222,15 +224,19 @@ class ContextResolver:
 
     def search_keywords(self, query: str, limit: int = 10) -> list[SearchHit]:
         """Rank pages with field-weighted BM25, phrase boosts, and query-coverage gating."""
-        tokens = _tokenize(_strip_query_scaffolding(query))
+        normalized_query = _strip_query_scaffolding(query)
+        raw_tokens = _TOKEN.findall(normalized_query.casefold())
+        tokens = [_stem(token) for token in raw_tokens]
+        term_labels = dict(zip(tokens, raw_tokens))
         query_terms = list(dict.fromkeys(token for token in tokens if token not in _STOPWORDS))
         if not query_terms:
             return []
         if self._documents is None:
             self._build_search_index()
 
-        results: list[tuple[SearchHit, bool, bool]] = []
+        results: list[tuple[SearchHit, bool, bool, bool]] = []
         phrase = " ".join(tokens)
+        content_phrase = " ".join(query_terms)
         minimum_matches = 1 if len(query_terms) <= 2 else 2
         document_count = len(self._documents or [])
         # Discovery metadata is curated for retrieval. A term present on at most a third of pages
@@ -272,11 +278,16 @@ class ContextResolver:
                 term for term in discovery_matches if self._document_frequency[term] <= specific_frequency
             }
             has_specific_discovery_match = bool(specific_discovery_matches)
-            has_distinct_discovery_match = name_anchor or any(
-                self._document_frequency[term] <= math.ceil(document_count / 2) for term in discovery_matches
+            body_phrase = len(query_terms) == 2 and content_phrase in document.normalized["body"]
+            has_distinct_discovery_match = (
+                body_phrase
+                or name_anchor
+                or any(self._document_frequency[term] <= math.ceil(document_count / 2) for term in discovery_matches)
             )
+            retain_two_term_candidate = has_distinct_discovery_match or matched == len(query_terms)
             supported = (
-                len(query_terms) == 1
+                body_phrase
+                or len(query_terms) == 1
                 or name_anchor
                 or title_matches >= 2
                 or (
@@ -288,6 +299,17 @@ class ContextResolver:
                     )
                 )
             )
+
+            coherent = True
+            if len(query_terms) == 2:
+                same_discovery_field = any(
+                    all(document.fields[field][term] for term in query_terms) for field in discovery_fields
+                )
+                other_term_evidence = any(
+                    term not in name_terms and any(document.fields[field][term] for field in _FIELD_WEIGHTS)
+                    for term in query_terms
+                )
+                coherent = same_discovery_field or body_phrase or (name_anchor and other_term_evidence)
 
             normalized_keys = document.normalized["keys"]
             if title_matches:
@@ -302,16 +324,16 @@ class ContextResolver:
             elif phrase and phrase in normalized_title:
                 score += 6
                 reasons.append("title phrase")
-            if phrase and phrase in normalized_keys:
+            if content_phrase in normalized_keys:
                 score += 5
                 reasons.append("alias/context phrase")
-            if phrase and phrase in document.normalized["tags"]:
+            if content_phrase in document.normalized["tags"]:
                 score += 3
                 reasons.append("tag phrase")
-            if phrase and phrase in document.normalized["summary"]:
+            if content_phrase in document.normalized["summary"]:
                 score += 2
                 reasons.append("summary phrase")
-            if phrase and phrase in document.normalized["body"]:
+            if content_phrase in document.normalized["body"]:
                 score += 0.75
                 reasons.append("body phrase")
 
@@ -320,16 +342,24 @@ class ContextResolver:
             reasons.append(f"{matched}/{len(query_terms)} query terms")
             if has_specific_discovery_match:
                 reasons.append("specific discovery metadata")
-            results.append((SearchHit(document.page, score, tuple(reasons)), supported, has_distinct_discovery_match))
+            if len(query_terms) == 2:
+                provenance = "; ".join(
+                    f"{term_labels[term]}={','.join(field for field in _FIELD_WEIGHTS if document.fields[field][term])}"
+                    for term in query_terms
+                )
+                reasons.append(f"field provenance: {provenance}")
+                if not coherent:
+                    reasons.append("incoherent evidence demoted")
+            results.append(
+                (SearchHit(document.page, score, tuple(reasons)), supported, retain_two_term_candidate, coherent)
+            )
 
-        if not any(supported for _, supported, _ in results):
+        if not any(supported for _, supported, _, _ in results):
             return []
-        results.sort(key=lambda item: (-item[0].score, item[0].page.title.lower()))
-        # Two-term questions are especially vulnerable to one useful term plus one incidental
-        # body match. Once the query is supported, retain only pages with a distinguishing field.
+        results.sort(key=lambda item: (not item[3], -item[0].score, item[0].page.title.lower()))
         if len(query_terms) == 2:
             results = [item for item in results if item[2]]
-        return [hit for hit, _, _ in results[:limit]]
+        return [hit for hit, _, _, _ in results[:limit]]
 
     def find_keywords(self, query: str, limit: int = 10) -> list[WikiPage]:
         return [hit.page for hit in self.search_keywords(query, limit)]
@@ -396,6 +426,7 @@ def _tokenize(text: str) -> list[str]:
 
 
 def _strip_query_scaffolding(query: str) -> str:
+    query = query.replace("\u2019", "'")
     for pattern in _QUERY_SCAFFOLDING:
         query = pattern.sub(" ", query)
     return query

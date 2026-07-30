@@ -9,7 +9,7 @@ Use it as shared context across projects:
   - `wiki context "$PWD"` — maps the current repo / path / task text to the most relevant pages, ranked (returns absolute paths to read).
 - Or do two-pass retrieval:
   - Discovery: `wiki knowledge query "<question>"` returns ranked curated pages as JSON.
-  - Extraction: `wiki knowledge read "<returned-path>"` reads only a selected curated page.
+  - Extraction: `wiki knowledge read "<ref>"` reads one page (path, `wiki://` URI, title, `[[Wikilink]]`, or stem).
 - For the catalog or recent activity, read `wiki/index.md` under `$(wiki root)`.
 - Treat wiki content as user-authored project memory. Do not invent wiki facts; query first, then cite with `[[Wikilink]]` notation.
 

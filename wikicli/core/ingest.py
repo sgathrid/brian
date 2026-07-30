@@ -73,6 +73,16 @@ class RetrievalCase:
 
 
 @dataclass(frozen=True)
+class RetrievalRegression:
+    """A judged query whose best acceptable target moved down in search results."""
+
+    query: str
+    targets: list[str]
+    before_rank: int
+    after_rank: int | None
+
+
+@dataclass(frozen=True)
 class KnowledgeUpdateRequest:
     """Canonical source-backed knowledge update request shared by CLI and MCP."""
 
@@ -96,48 +106,15 @@ class KnowledgeUpdateResult:
     approval_digest: str
     diagnostics: list[KnowledgeDiagnostic] = field(default_factory=list)
     debt: list[str] = field(default_factory=list)
+    created_pages: list[str] = field(default_factory=list)
+    updated_pages: list[str] = field(default_factory=list)
+    metadata_changes: dict[str, list[str]] = field(default_factory=dict)
+    links_added: dict[str, list[str]] = field(default_factory=dict)
+    links_removed: dict[str, list[str]] = field(default_factory=dict)
+    retrieval_regressions: list[RetrievalRegression] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-
-
-def update_knowledge(
-    repo_root: Path,
-    *,
-    source_title: str,
-    source_content: str | None,
-    existing_source_path: str | None,
-    source_type: str,
-    page_changes: list[PageChange],
-    retrieval_cases: list[RetrievalCase],
-    confirmed: bool | None = None,
-    approval_digest: str | None = None,
-) -> KnowledgeUpdateResult:
-    """Validate a source-backed graph update, then apply it atomically when approved.
-
-    New ``source_content`` is written verbatim under ``raw/inbox`` unless an existing raw file
-    already contains the exact same bytes, in which case that path is reused. Alternatively, an
-    existing immutable ``raw/...`` file can be referenced without copying it. Page content may use
-    ``{{SOURCE_PATH}}``; missing provenance citations are rendered by the engine. Applying requires
-    the digest returned by a ready preview of the same request and repository state.
-
-    Valid-but-failing proposals return ``status="needs_revision"`` with structured diagnostics
-    instead of raising. Schema-invalid requests still raise ``ValueError``.
-    """
-    request = KnowledgeUpdateRequest(
-        source_title=source_title,
-        page_changes=page_changes,
-        retrieval_cases=retrieval_cases,
-        source_content=source_content,
-        existing_source_path=existing_source_path,
-        source_type=source_type,
-        approval_digest=approval_digest,
-    )
-    if confirmed is None:
-        apply = approval_digest is not None
-    else:
-        apply = confirmed
-    return apply_knowledge_update(repo_root, request, apply=apply)
 
 
 def knowledge_update_request_from_dict(
@@ -199,13 +176,18 @@ def knowledge_update_request_from_dict(
     )
 
 
-def apply_knowledge_update(
+def update_knowledge(
     repo_root: Path,
     request: KnowledgeUpdateRequest,
     *,
     apply: bool | None = None,
 ) -> KnowledgeUpdateResult:
-    """Canonical update entrypoint shared by transports."""
+    """Validate a source-backed graph update, then atomically apply an approved request.
+
+    A request without an approval digest is previewed. Applying requires the digest returned by a
+    ready preview of the same request and governed repository state. Valid-but-failing proposals
+    return ``status="needs_revision"``; schema-invalid requests raise ``ValueError``.
+    """
     repo_root = repo_root.resolve()
     source_title = request.source_title
     source_content = request.source_content
@@ -272,6 +254,10 @@ def apply_knowledge_update(
             page_file.write_text(content, encoding="utf-8")
             rendered_pages.append(change.path)
 
+        created_pages, updated_pages, metadata_changes, links_added, links_removed = _page_deltas(
+            repo_root, candidate, rendered_pages
+        )
+
         registry_path = candidate / "wiki/sources.json"
         if registry_path.is_file():
             registry = json.loads(registry_path.read_text(encoding="utf-8"))
@@ -280,13 +266,14 @@ def apply_knowledge_update(
         sources = registry.get("sources")
         if registry.get("version") != 1 or not isinstance(sources, dict):
             raise ValueError("wiki/sources.json must contain version 1 and a sources object")
-        prior_pages = sources.get(source_path, {}).get("pages", [])
-        mapped_pages = sorted({*prior_pages, *rendered_pages}) if isinstance(prior_pages, list) else rendered_pages
+        existing_source = sources.get(source_path, {})
+        prior_pages = existing_source.get("pages", []) if isinstance(existing_source, dict) else []
         sources[source_path] = {
             "status": "incorporated",
-            "pages": mapped_pages,
+            "pages": prior_pages if isinstance(prior_pages, list) else [],
             "note": f"{source_type.strip() or 'context'} source: {source_title.strip()}",
         }
+        _reconcile_source_mappings(candidate, sources, rendered_pages)
         registry_path.parent.mkdir(parents=True, exist_ok=True)
         registry_path.write_text(json.dumps(registry, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
@@ -304,6 +291,8 @@ def apply_knowledge_update(
         cases_path.parent.mkdir(parents=True, exist_ok=True)
         cases_path.write_text(_format_cases(merged_cases), encoding="utf-8")
 
+        retrieval_regressions = _retrieval_regressions(repo_root, candidate)
+
         db = WikiDatabase(candidate / "wiki")
         generate_index(db, candidate / "wiki")
         generate_backlinks(db, candidate / "wiki")
@@ -317,15 +306,27 @@ def apply_knowledge_update(
             transaction_retrieval_queries={case.query for case in normalized_cases},
         )
         debt = [warning for warning in report.warnings if "repository debt" in warning or "unclassified raw" in warning]
-        if not report.ok:
+        # Fail closed: rank regressions block ready/apply even when other gates pass.
+        if not report.ok or retrieval_regressions:
+            diagnostics: list[KnowledgeDiagnostic] = []
+            if not report.ok:
+                diagnostics.extend(_diagnostics_from_report(report))
+            if retrieval_regressions:
+                diagnostics.extend(_diagnostics_from_retrieval_regressions(retrieval_regressions))
             return KnowledgeUpdateResult(
                 status="needs_revision",
                 source_path=source_path,
                 pages=rendered_pages,
                 facts=list(report.facts),
                 approval_digest="",
-                diagnostics=_diagnostics_from_report(report),
+                diagnostics=diagnostics,
                 debt=debt,
+                created_pages=created_pages,
+                updated_pages=updated_pages,
+                metadata_changes=metadata_changes,
+                links_added=links_added,
+                links_removed=links_removed,
+                retrieval_regressions=retrieval_regressions,
             )
 
         if not should_apply:
@@ -337,6 +338,12 @@ def apply_knowledge_update(
                 approval_digest=expected_approval,
                 diagnostics=[],
                 debt=debt,
+                created_pages=created_pages,
+                updated_pages=updated_pages,
+                metadata_changes=metadata_changes,
+                links_added=links_added,
+                links_removed=links_removed,
+                retrieval_regressions=retrieval_regressions,
             )
 
         current_approval = _approval_digest(
@@ -395,6 +402,12 @@ def apply_knowledge_update(
         approval_digest=expected_approval,
         diagnostics=[],
         debt=[w for w in applied_report.warnings if "repository debt" in w or "unclassified raw" in w],
+        created_pages=created_pages,
+        updated_pages=updated_pages,
+        metadata_changes=metadata_changes,
+        links_added=links_added,
+        links_removed=links_removed,
+        retrieval_regressions=retrieval_regressions,
     )
 
 
@@ -633,6 +646,114 @@ def _render_page_content(content: str, source_path: str) -> str:
     return rendered[:start] + section + rendered[end:]
 
 
+def _page_deltas(
+    repo_root: Path, candidate: Path, page_paths: list[str]
+) -> tuple[list[str], list[str], dict[str, list[str]], dict[str, list[str]], dict[str, list[str]]]:
+    """Return concise, deterministic changes for the pages in one update."""
+    created: list[str] = []
+    updated: list[str] = []
+    metadata: dict[str, list[str]] = {}
+    added: dict[str, list[str]] = {}
+    removed: dict[str, list[str]] = {}
+    for rel in page_paths:
+        current_path = repo_root / rel
+        candidate_path = candidate / rel
+        new_page = WikiPage(candidate_path)
+        new_links = set(new_page.wikilinks)
+        if not current_path.is_file():
+            created.append(rel)
+            if new_links:
+                added[rel] = sorted(new_links, key=str.casefold)
+            continue
+        if current_path.read_bytes() == candidate_path.read_bytes():
+            continue
+        updated.append(rel)
+        old_page = WikiPage(current_path)
+        changed_fields = sorted(
+            key
+            for key in old_page.frontmatter.keys() | new_page.frontmatter.keys()
+            if old_page.frontmatter.get(key) != new_page.frontmatter.get(key)
+        )
+        if changed_fields:
+            metadata[rel] = changed_fields
+        old_links = set(old_page.wikilinks)
+        if new_links - old_links:
+            added[rel] = sorted(new_links - old_links, key=str.casefold)
+        if old_links - new_links:
+            removed[rel] = sorted(old_links - new_links, key=str.casefold)
+    return created, updated, metadata, added, removed
+
+
+def _reconcile_source_mappings(candidate: Path, sources: dict[str, Any], page_paths: list[str]) -> None:
+    """Derive changed-page source mappings from their provenance citations."""
+    for rel in page_paths:
+        references = _provenance_references((candidate / rel).read_text(encoding="utf-8"))
+        for source, entry in sources.items():
+            if not isinstance(entry, dict) or not isinstance(entry.get("pages"), list):
+                continue
+            mapped = {page for page in entry["pages"] if isinstance(page, str)}
+            if source in references:
+                mapped.add(rel)
+            else:
+                mapped.discard(rel)
+            entry["pages"] = sorted(mapped)
+
+
+def _best_target_rank(resolver: ContextResolver, query: str, relevance: dict[str, int]) -> tuple[list[str], int | None]:
+    if not relevance:
+        return [], None
+    highest_grade = max(relevance.values())
+    targets = sorted(stem for stem, grade in relevance.items() if grade == highest_grade)
+    results = [page.stem for page in resolver.find_keywords(query, limit=5)]
+    ranks = [results.index(target) + 1 for target in targets if target in results]
+    return targets, min(ranks, default=None)
+
+
+def _retrieval_regressions(repo_root: Path, candidate: Path) -> list[RetrievalRegression]:
+    """Compare existing judged queries and report only worse best-target ranks."""
+    cases_path = repo_root / "benchmarks/cold_start_cases.json"
+    if not cases_path.is_file():
+        return []
+    try:
+        cases = json.loads(cases_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(cases, list):
+        return []
+    current_resolver = ContextResolver(WikiDatabase(repo_root / "wiki"))
+    candidate_resolver = ContextResolver(WikiDatabase(candidate / "wiki"))
+    regressions: list[RetrievalRegression] = []
+    for case in cases:
+        if (
+            not isinstance(case, dict)
+            or not isinstance(case.get("query"), str)
+            or not isinstance(case.get("relevance"), dict)
+        ):
+            continue
+        relevance = case["relevance"]
+        if not relevance or any(type(grade) is not int or grade < 1 for grade in relevance.values()):
+            continue
+        try:
+            normalized: dict[str, int] = {}
+            for stem, grade in relevance.items():
+                key = _normalize_relevance_key(str(stem))
+                normalized[key] = max(normalized.get(key, 0), grade)
+        except ValueError:
+            continue
+        targets, before_rank = _best_target_rank(current_resolver, case["query"], normalized)
+        _, after_rank = _best_target_rank(candidate_resolver, case["query"], normalized)
+        if before_rank is not None and (after_rank is None or after_rank > before_rank):
+            regressions.append(
+                RetrievalRegression(
+                    query=case["query"],
+                    targets=targets,
+                    before_rank=before_rank,
+                    after_rank=after_rank,
+                )
+            )
+    return regressions
+
+
 def _format_cases(cases: list[dict[str, Any]]) -> str:
     return "[\n" + ",\n".join(f"  {json.dumps(case, ensure_ascii=False)}" for case in cases) + "\n]\n"
 
@@ -659,6 +780,33 @@ def _diagnostics_from_report(report: IngestionReport) -> list[KnowledgeDiagnosti
                 diagnostics.append(_diagnostic_from_error(error))
         return diagnostics
     return [_diagnostic_from_error(error) for error in report.errors]
+
+
+def _diagnostics_from_retrieval_regressions(
+    regressions: list[RetrievalRegression],
+) -> list[KnowledgeDiagnostic]:
+    """Structured repair guidance when an existing judged query loses rank."""
+    diagnostics: list[KnowledgeDiagnostic] = []
+    for item in regressions:
+        after = "unranked" if item.after_rank is None else str(item.after_rank)
+        target_list = ", ".join(item.targets)
+        diagnostics.append(
+            KnowledgeDiagnostic(
+                code="RETRIEVAL_REGRESSION",
+                message=(
+                    f"cold-start query regressed for targets [{target_list}]: "
+                    f"rank {item.before_rank} -> {after}"
+                ),
+                query=item.query,
+                expected=f"rank <= {item.before_rank}",
+                observed=[f"rank={after}", *[f"target={target}" for target in item.targets]],
+                fix=(
+                    "Restore or strengthen aliases, context_keys, summary, or body so existing "
+                    "judged queries keep their prior rank before re-previewing."
+                ),
+            )
+        )
+    return diagnostics
 
 
 def _diagnostic_from_error(error: str) -> KnowledgeDiagnostic:
@@ -985,16 +1133,17 @@ def _check_questions(
         covered.update(normalized_relevance)
         results = [page.stem for page in resolver.find_keywords(query, limit=5)]
         if normalized_relevance:
-            target = max(normalized_relevance, key=normalized_relevance.__getitem__)
-            hit_at_one.append(results[:1] == [target])
-            hit_at_three.append(target in results[:3])
-            if target not in results[:3]:
+            highest_grade = max(normalized_relevance.values())
+            targets = sorted(stem for stem, grade in normalized_relevance.items() if grade == highest_grade)
+            hit_at_one.append(any(target in results[:1] for target in targets))
+            hit_at_three.append(any(target in results[:3] for target in targets))
+            if not any(target in results[:3] for target in targets):
                 message = f"query did not rank target in top 3: {query}"
                 diagnostic = KnowledgeDiagnostic(
                     code="RETRIEVAL_MISS",
                     message=message,
                     query=query,
-                    expected=target,
+                    expected=", ".join(targets),
                     observed=results,
                     fix="Strengthen page aliases/context_keys or rewrite the novice-language query.",
                 )
