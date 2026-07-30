@@ -1,4 +1,4 @@
-"""Transport-neutral query and read operations for curated company knowledge."""
+"""Transport-neutral query and read operations for curated knowledge."""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ def _page_location(repo_root: Path, page: WikiPage) -> tuple[str, str]:
     return path, f"wiki://page/{resource_path}"
 
 
-def query_company_knowledge(repo_root: Path, question: str, limit: int = 5) -> KnowledgeQueryResult:
+def query_knowledge(repo_root: Path, question: str, limit: int = 5) -> KnowledgeQueryResult:
     """Return ranked curated pages for one natural-language question."""
     repo_root = repo_root.resolve()
     question = question.strip()
@@ -69,21 +69,34 @@ def query_company_knowledge(repo_root: Path, question: str, limit: int = 5) -> K
     return KnowledgeQueryResult(question, hits, not hits)
 
 
-def read_company_page(repo_root: Path, path: str) -> KnowledgePageResult:
-    """Read one curated page while rejecting paths outside ``wiki/``."""
+def read_page(repo_root: Path, ref: str) -> KnowledgePageResult:
+    """Read one curated page by path, URI, title, wikilink, or stem."""
     repo_root = repo_root.resolve()
-    requested = path.strip()
-    if requested.startswith("wiki://page/"):
-        requested = requested.removeprefix("wiki://page/")
-    elif requested.startswith("wiki/"):
-        requested = requested.removeprefix("wiki/")
-    requested = requested.removesuffix(".md")
+    requested = ref.strip()
+    is_wikilink = requested.startswith("[[") and requested.endswith("]]")
+    if is_wikilink:
+        requested = requested[2:-2].strip()
+    is_path = not is_wikilink and (
+        requested.startswith(("wiki://page/", "wiki/")) or "/" in requested or requested.endswith(".md")
+    )
     wiki_root = (repo_root / "wiki").resolve()
-    page_file = (wiki_root / f"{requested}.md").resolve()
-    if not page_file.is_relative_to(wiki_root):
-        raise ValueError(f"invalid company wiki path: {path}")
-    if not page_file.is_file():
-        raise FileNotFoundError(f"company wiki page not found: {path}")
+
+    if not is_path:
+        page = WikiDatabase(wiki_root).resolve_link(requested)
+        if page is None:
+            raise FileNotFoundError(f"knowledge page not found: {ref}")
+        page_file = page.filepath
+    else:
+        if requested.startswith("wiki://page/"):
+            requested = requested.removeprefix("wiki://page/")
+        elif requested.startswith("wiki/"):
+            requested = requested.removeprefix("wiki/")
+        requested = requested.removesuffix(".md")
+        page_file = (wiki_root / f"{requested}.md").resolve()
+        if not page_file.is_relative_to(wiki_root):
+            raise ValueError(f"invalid knowledge page reference: {ref}")
+        if not page_file.is_file():
+            raise FileNotFoundError(f"knowledge page not found: {ref}")
     page = WikiPage(page_file)
     canonical_path, uri = _page_location(repo_root, page)
     return KnowledgePageResult(page.title, canonical_path, uri, page_file.read_text(encoding="utf-8"))
