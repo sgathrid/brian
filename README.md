@@ -34,7 +34,7 @@
 > Brian holds decisions, product truth, policies, client context, and the stuff that usually lives in Slack threads and people's heads. Agents read and draft updates as you work. You approve writes, then `git push` when you're ready to share.
 
 
-## Why Brian
+## Why Brian?
 
 Every AI session starts from zero. So you paste the same briefs, policies, and “remember when we decided…” notes into Claude, Cursor, ChatGPT, and email drafts — again and again.
 
@@ -154,6 +154,9 @@ Start adding knowledge in two ways:
 
 > [!TIP]
 > **Seed 2–3 core docs for better cross-linking:** Ingesting a few foundational documents upfront (e.g., product overview, tech stack spec, team directory) establishes the initial web of `[[Wikilinks]]` and tags. This helps agents automatically connect subsequent notes to the right context.
+> 
+> **To cut agent read time & costs:** we recommend converting documents (PDF, DOCX, PPTX, XLSX) to clean Markdown using Microsoft's [MarkItDown](https://github.com/microsoft/markitdown) before ingestion:
+> ```uvx markitdown raw/<YOUR FILE>.pptx > raw/<YOUR FILE>.md```
 
 ### 5. Try it
 
