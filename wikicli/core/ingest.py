@@ -306,14 +306,20 @@ def update_knowledge(
             transaction_retrieval_queries={case.query for case in normalized_cases},
         )
         debt = [warning for warning in report.warnings if "repository debt" in warning or "unclassified raw" in warning]
-        if not report.ok:
+        # Fail closed: rank regressions block ready/apply even when other gates pass.
+        if not report.ok or retrieval_regressions:
+            diagnostics: list[KnowledgeDiagnostic] = []
+            if not report.ok:
+                diagnostics.extend(_diagnostics_from_report(report))
+            if retrieval_regressions:
+                diagnostics.extend(_diagnostics_from_retrieval_regressions(retrieval_regressions))
             return KnowledgeUpdateResult(
                 status="needs_revision",
                 source_path=source_path,
                 pages=rendered_pages,
                 facts=list(report.facts),
                 approval_digest="",
-                diagnostics=_diagnostics_from_report(report),
+                diagnostics=diagnostics,
                 debt=debt,
                 created_pages=created_pages,
                 updated_pages=updated_pages,
@@ -774,6 +780,33 @@ def _diagnostics_from_report(report: IngestionReport) -> list[KnowledgeDiagnosti
                 diagnostics.append(_diagnostic_from_error(error))
         return diagnostics
     return [_diagnostic_from_error(error) for error in report.errors]
+
+
+def _diagnostics_from_retrieval_regressions(
+    regressions: list[RetrievalRegression],
+) -> list[KnowledgeDiagnostic]:
+    """Structured repair guidance when an existing judged query loses rank."""
+    diagnostics: list[KnowledgeDiagnostic] = []
+    for item in regressions:
+        after = "unranked" if item.after_rank is None else str(item.after_rank)
+        target_list = ", ".join(item.targets)
+        diagnostics.append(
+            KnowledgeDiagnostic(
+                code="RETRIEVAL_REGRESSION",
+                message=(
+                    f"cold-start query regressed for targets [{target_list}]: "
+                    f"rank {item.before_rank} -> {after}"
+                ),
+                query=item.query,
+                expected=f"rank <= {item.before_rank}",
+                observed=[f"rank={after}", *[f"target={target}" for target in item.targets]],
+                fix=(
+                    "Restore or strengthen aliases, context_keys, summary, or body so existing "
+                    "judged queries keep their prior rank before re-previewing."
+                ),
+            )
+        )
+    return diagnostics
 
 
 def _diagnostic_from_error(error: str) -> KnowledgeDiagnostic:

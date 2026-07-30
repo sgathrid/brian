@@ -363,13 +363,20 @@ Compiled from `{{SOURCE_PATH}}`.
         apply=False,
     )
 
-    assert result.status == "ready", result.diagnostics
+    assert result.status == "needs_revision", result.diagnostics
+    assert result.approval_digest == ""
     assert [item.query for item in result.retrieval_regressions] == ["primary company entity"]
     regression = result.retrieval_regressions[0]
     assert regression.targets == ["alpha"]
     assert regression.before_rank == 1
     assert regression.after_rank == 2
     assert result.metadata_changes["wiki/entities/alpha.md"] == ["summary", "title"]
+    diag = next(item for item in result.diagnostics if item.code == "RETRIEVAL_REGRESSION")
+    assert diag.query == "primary company entity"
+    assert diag.expected == "rank <= 1"
+    assert "rank=2" in diag.observed
+    # No approval digest means CLI/MCP cannot apply; guide page must stay unwritten.
+    assert not (root / "wiki/concepts/alpha-guide.md").exists()
 
 
 def test_knowledge_update_requires_the_exact_preview_digest(tmp_path: Path):
