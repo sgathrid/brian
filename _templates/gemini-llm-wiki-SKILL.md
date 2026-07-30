@@ -1,43 +1,37 @@
 ---
 name: llm-wiki
-description: Protocol for Brian's centralized context engine (the LLM Wiki). Triggers on tasks involving wiki context resolution, ingestion, querying, or health checks — and at the start of work in any repo.
+description: Ground work in Brian's curated company knowledge. Use at the start of work and for questions about Brian, its products, partners, customers, commercial or clinical work, strategy, or research.
 ---
 
 # Brian LLM Wiki Protocol
 
-The Brian wiki (located at `$(wiki root)`) is a centralized context engine holding company, product, clinical, and research context. It is **not** code documentation.
+The Brian wiki at `$(wiki root)` is curated company knowledge, not code documentation or a raw archive.
 
-The wiki CLI is on your PATH (run the installer if not). Locate the repo with `wiki root`; all paths below are relative to that root.
+Use the injected company context as the starting point. Query the wiki proactively, without waiting for the user,
+when the requested specificity or freshness exceeds the available evidence, or when a citation is requested. Treat
+partner, legal, and financial status, along with answers that will be acted on or repeated externally, as
+freshness-sensitive. When curated evidence is unverified or explicitly requires source verification, querying is
+only the first step: verify the owning record or repository before consequential use. Otherwise, do not query
+ritualistically.
 
-## Architecture
+```bash
+wiki context "$PWD"
+wiki knowledge query "<question>"
+wiki knowledge read "<path, URI, title, [[Wikilink]], or stem>"
+```
 
-- **`raw/`**: immutable source documents — LOCAL ONLY, never committed.
-- **`wiki/`**: the curated knowledge graph (what agents read).
-- **`internal/`**: capabilities catalog, agent skills, prompt templates.
-- **`_templates/`**: agent pointer files and protocol documents.
-- **Tools (on PATH)**: `wiki` (context, find, tags, audit, gen, ingest check).
+When grounding is needed, search, read relevant pages, and follow wikilinks until the evidence is sufficient. Cite pages as `[[Wikilink]]`.
+If curated knowledge does not support an answer, say so.
 
-## Day-to-Day Operations
+For source-backed updates:
 
-1. **Resolve Working Context** (run when starting work in any repo):
-   ```bash
-   wiki context "$PWD"
-   ```
-2. **Search / Query**:
-   ```bash
-   wiki knowledge query "<question>"
-   wiki knowledge read "<returned-path>"
-   ```
-   Results are deterministic JSON over curated pages only. Cite answers as `[[Wikilink]]`.
+1. Query and read existing coverage.
+2. Inspect evidence with `wiki knowledge sources [raw/path]`.
+3. Preview one complete payload with `wiki knowledge update --input <payload.json>`.
+4. Repair `needs_revision` diagnostics until the preview is `ready`.
+5. Explain the substantive changes and wait for explicit user approval.
+6. Apply the unchanged payload with
+   `wiki knowledge update --input <payload.json> --approve <approval_digest>`.
 
-3. **Ingest Source Material**:
-   - **Discover** existing coverage with `wiki knowledge query` and `wiki knowledge read`.
-   - **Inspect evidence** with `wiki knowledge sources [raw/path]`; prefer an existing source path.
-   - **Plan** atomic page updates, syntheses, links, claim dispositions, and novice-language questions.
-   - **Preview** one complete JSON payload with `wiki knowledge update --input <payload.json>`.
-   - **Repair** structured `needs_revision` diagnostics and preview again until status is `ready`.
-   - **Approve**: show the plan to the user and wait for explicit approval.
-   - **Apply** the unchanged payload with
-     `wiki knowledge update --input <payload.json> --approve <approval_digest>`.
-   - The command owns lossless raw capture, source accounting, generated files, validation, and rollback.
-   - **Commit** only when the task is wiki-focused or the user asks: `git -C "$(wiki root)" add wiki/ && git -C "$(wiki root)" commit`.
+The engine owns lossless source capture, source accounting, generated files, validation, and rollback. It never
+commits or pushes.

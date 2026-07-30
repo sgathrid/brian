@@ -155,7 +155,14 @@ def run_session_start_hook(repo_root: Path, input_data: str = "") -> str:
         f"{config.name} — {config.description}. "
         f"This is a company knowledge base, NOT code documentation: it holds knowledge no repository "
         f'contains. Repo: {repo_root} (CLI on PATH). Pull more with `wiki find "<keywords>"` or '
-        f"/wiki-query; cite pages as [[Wikilink]].\n\n"
+        f"/wiki-query; cite pages as [[Wikilink]].\n"
+        "Use the injected company context as the starting point. Query the knowledge base proactively, "
+        "without waiting for the user, when the requested specificity or freshness exceeds the available "
+        "evidence, or when a citation is requested. Treat partner, legal, and financial status, along with answers "
+        "that will be acted on or repeated externally, as freshness-sensitive. When curated evidence is "
+        "unverified or explicitly requires source verification, querying is only the first step: verify the "
+        "owning record or repository before consequential use. Otherwise, do not query ritualistically. "
+        "Follow relevant links until the evidence is sufficient; if it is not supported, say so.\n\n"
     )
 
     upkeep = format_upkeep_block(
