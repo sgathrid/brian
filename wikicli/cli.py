@@ -118,7 +118,10 @@ def main():
     p_knowledge_query.add_argument("question", help="Natural-language company question")
     p_knowledge_query.add_argument("--limit", type=int, default=5, help="Maximum results (1-10)")
     p_knowledge_read = knowledge_commands.add_parser("read", help="Read one curated company page as JSON")
-    p_knowledge_read.add_argument("path", help="Path or wiki:// URI returned by query")
+    p_knowledge_read.add_argument(
+        "path",
+        help="Page ref: wiki/... path, wiki:// URI, title, [[Wikilink]], or stem from query",
+    )
     p_knowledge_update = knowledge_commands.add_parser(
         "update", help="Preview or apply one source-backed knowledge update from JSON"
     )

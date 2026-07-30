@@ -18,9 +18,12 @@ Maps the current repo / a path / free task text (e.g. "reviewing an SBIR pitch o
 ## Query and read
 
 ```bash
-wiki knowledge query "<question>"             # deterministic JSON with ranked curated pages
-wiki knowledge read "wiki/projects/example.md" # deterministic JSON for one returned page
+wiki knowledge query "<question>"   # deterministic JSON with ranked curated pages
+wiki knowledge read "<ref>"         # path, wiki:// URI, title, [[Wikilink]], or stem
 ```
+
+CLI and MCP share one engine. Prefer `wiki knowledge …` when the host has no MCP; the five MCP tools
+(`query_knowledge`, `read_page`, `list_sources`, `inspect_source`, `update_knowledge`) return the same JSON.
 
 Read only the pages needed to answer. Cite them as `[[Page Title]]`. A query with `"no_results": true`
 means the curated wiki does not support the question; do not fill the gap from incidental repository text.

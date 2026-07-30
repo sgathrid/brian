@@ -7,7 +7,7 @@ knowledge that no repository contains. The CLI is on your PATH.
 
 - Context for where you are: `wiki context "$PWD"`
 - Query curated knowledge: `wiki knowledge query "<question>"`
-- Read a returned page: `wiki knowledge read "wiki/<scope>/<page>.md"`
+- Read a returned page: `wiki knowledge read "<ref>"` (path, URI, title, `[[Wikilink]]`, or stem)
 - Catalog: `wiki/index.md` inside `$(wiki root)`
 
 Cite pages as `[[Wikilink]]`, and never invent wiki facts — query first.

@@ -11,7 +11,8 @@ Follow this two-pass retrieval procedure using the canonical structured interfac
 - Report the returned paths (top-ranked first). Do NOT read them yet.
 
 **Pass 2 — Extraction:**
-- Read only the 3-5 most relevant results with `wiki knowledge read "<path-or-wiki-uri>"`.
+- Read only the 3-5 most relevant results with `wiki knowledge read "<ref>"`
+  (path, `wiki://` URI, title, `[[Wikilink]]`, or stem from the query hit).
 
 **Answer:**
 - Synthesize a direct answer to the question.
