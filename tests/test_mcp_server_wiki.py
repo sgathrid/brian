@@ -87,11 +87,15 @@ def test_mcp_exposes_typed_tools_with_behavior_annotations() -> None:
     assert tools["apply_knowledge_update"].annotations.destructiveHint is True
     assert tools["apply_knowledge_update"].annotations.idempotentHint is False
     assert "hits" in tools["query_company_knowledge"].outputSchema["properties"]
-    update_properties = tools["apply_knowledge_update"].inputSchema["properties"]
+    update_tool = tools["apply_knowledge_update"]
+    update_properties = update_tool.inputSchema["properties"]
     assert update_properties["page_changes"]["items"]["$ref"] == "#/$defs/PageChange"
     assert "source_content" in update_properties
     assert "existing_source_path" in update_properties
-    assert "approval_digest" in update_properties
+    assert "Deprecated compatibility flag" in update_properties["confirmed"]["description"]
+    assert "status=ready" in update_properties["approval_digest"]["description"]
+    assert "omit confirmed and approval_digest to preview" in update_tool.description
+    assert update_tool.outputSchema["properties"]["status"]["enum"] == ["needs_revision", "ready", "applied"]
 
 
 def test_invalid_mcp_read_is_reported_as_tool_error(mcp_repo: Path) -> None:
@@ -130,3 +134,47 @@ def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPat
     assert request.page_changes == changes
     assert request.existing_source_path == "raw/one.md"
     assert captured["apply"] is None
+
+
+def test_update_tool_keeps_confirmed_true_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_update(root: Path, request: object, *, apply: bool | None = None) -> KnowledgeUpdateResult:
+        captured.update(request=request, apply=apply)
+        return KnowledgeUpdateResult("applied", "raw/one.md", ["wiki/concepts/one.md"], ["validated"], "digest")
+
+    monkeypatch.setattr(server, "apply_update_request", fake_update)
+    server.apply_knowledge_update(
+        "Existing evidence",
+        [PageChange("wiki/concepts/one.md", "complete page")],
+        [RetrievalCase("what is one", {"one": 3})],
+        existing_source_path="raw/one.md",
+        confirmed=True,
+        approval_digest="digest",
+    )
+
+    assert captured["request"].approval_digest == "digest"
+    assert captured["apply"] is True
+
+
+@pytest.mark.parametrize(
+    ("confirmed", "approval_digest", "message"),
+    [
+        (True, None, "confirmed=true requires approval_digest from a status=ready preview"),
+        (False, "digest", "confirmed=false cannot be combined with approval_digest"),
+    ],
+)
+def test_update_tool_rejects_ambiguous_compatibility_inputs(
+    confirmed: bool,
+    approval_digest: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        server.apply_knowledge_update(
+            "Existing evidence",
+            [PageChange("wiki/concepts/one.md", "complete page")],
+            [RetrievalCase("what is one", {"one": 3})],
+            existing_source_path="raw/one.md",
+            confirmed=confirmed,
+            approval_digest=approval_digest,
+        )

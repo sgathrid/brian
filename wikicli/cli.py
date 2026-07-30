@@ -128,7 +128,9 @@ def main():
     )
     p_knowledge_update.add_argument("--input", default="-", help="JSON payload path, or - for stdin")
     p_knowledge_update.add_argument(
-        "--approve", metavar="DIGEST", help="Apply only the exact repository state and payload previously previewed"
+        "--approve",
+        metavar="DIGEST",
+        help="Apply with the digest from a status=ready preview of this exact payload and repository state",
     )
     p_knowledge_sources = knowledge_commands.add_parser(
         "sources", help="List classified and unclassified raw sources as JSON"

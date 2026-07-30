@@ -6,10 +6,11 @@ import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
+from pydantic import Field
 
 REPO_ROOT = Path(os.environ.get("WIKI_ROOT", Path(__file__).resolve().parent.parent)).resolve()
 if str(REPO_ROOT) not in sys.path:
@@ -36,9 +37,11 @@ Never present raw source material as curated truth.
 Before apply_knowledge_update:
 1. Call list_company_sources / inspect_company_source when the evidence may already live under raw/.
 2. Search existing coverage, then propose page changes and claim dispositions to the user.
-3. Preview with no approval_digest (or confirmed=false). Valid-but-failing proposals return
+3. Preview by omitting approval_digest. Valid-but-failing proposals return
    status=needs_revision with structured diagnostics — fix and retry; do not treat that as a hard tool crash.
 4. After explicit user approval, resend the same payload with approval_digest from the ready preview.
+
+The confirmed field is deprecated compatibility input. Omit it for the canonical preview/apply flow.
 
 Provide exactly one source: existing_source_path for an immutable file under raw/, or source_content for new
 user-confirmed context. Exact content matches reuse an existing raw path automatically. Page content may cite
@@ -153,21 +156,44 @@ def apply_knowledge_update(
     source_content: str | None = None,
     existing_source_path: str | None = None,
     source_type: str = "user-confirmed context",
-    confirmed: bool | None = None,
-    approval_digest: str | None = None,
+    confirmed: Annotated[
+        bool | None,
+        Field(
+            description=(
+                "Deprecated compatibility flag; omit it. false forces preview and cannot be combined with "
+                "approval_digest. true requests apply and requires approval_digest from a status=ready preview "
+                "of the exact unchanged payload and repository state."
+            )
+        ),
+    ] = None,
+    approval_digest: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Omit for preview. After explicit user approval, pass the digest returned by status=ready for "
+                "the exact unchanged payload and repository state to apply."
+            )
+        ),
+    ] = None,
 ) -> KnowledgeUpdateResult:
     """Validate and optionally apply a source-backed update to curated company knowledge.
 
-    First call without approval_digest (or with confirmed=false) to preview. status=ready means the
-    complete update passes every ingestion gate without writing. status=needs_revision returns structured
-    diagnostics the agent should fix. After explicit user approval, call the same payload with
-    approval_digest from the ready preview (confirmed=true remains accepted for compatibility).
+    Canonical flow: omit confirmed and approval_digest to preview. status=ready means the complete update
+    passes every ingestion gate without writing; status=needs_revision returns structured diagnostics the
+    agent should fix. After explicit user approval, call the same unchanged payload with approval_digest from
+    that ready preview. confirmed is deprecated and remains accepted only for compatibility.
     Provide exactly one source: existing_source_path for an immutable file already under raw/, or
     source_content for new user-confirmed context. Exact duplicates reuse existing raw paths.
     Use `{{SOURCE_PATH}}` in page provenance sections; missing citations are rendered by the engine.
     Retrieval relevance accepts stems, wiki paths, or wiki:// URIs. The server writes no partial update
     and never commits.
     """
+    if confirmed is False and approval_digest is not None:
+        raise ValueError("confirmed=false cannot be combined with approval_digest; omit both to preview")
+    if confirmed is True and approval_digest is None:
+        raise ValueError(
+            "confirmed=true requires approval_digest from a status=ready preview of the exact unchanged update"
+        )
     if confirmed is False:
         approval_digest = None
         apply_flag = False

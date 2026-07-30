@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .audit import audit_wiki
 from .generate import generate_backlinks, generate_index, generate_registry, generate_tags
@@ -89,7 +89,7 @@ class KnowledgeUpdateRequest:
 class KnowledgeUpdateResult:
     """Validated outcome of a previewed, revised, or applied knowledge update."""
 
-    status: str
+    status: Literal["needs_revision", "ready", "applied"]
     source_path: str
     pages: list[str]
     facts: list[str]

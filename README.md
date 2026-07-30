@@ -474,11 +474,14 @@ Agents use these on your behalf; handy for debugging:
 Updates always preview first: the agent repairs structured `needs_revision` diagnostics, presents a `ready`
 proposal for approval, and applies only the exact payload bound to that approval digest. Existing `raw/` files
 can be selected directly, byte-identical new content reuses them automatically, and the engine never commits or
-pushes.
+pushes. For `wiki knowledge update`, exit `0` means ready/applied, `3` means repairable `needs_revision`, `2`
+means an invalid request or approval, and `1` means an operational failure; every response remains structured JSON.
 
 Claude Desktop exposes the same workflow through five MCP tools: query and read curated knowledge, list and
 inspect raw-source evidence, then preview or apply one governed update. Raw evidence is deliberately kept
-separate from curated answers until an approved update passes validation.
+separate from curated answers until an approved update passes validation. The canonical MCP flow omits the
+deprecated `confirmed` compatibility field: no digest previews; the digest from a `ready` preview applies the
+exact unchanged payload after approval.
 
 </details>
 

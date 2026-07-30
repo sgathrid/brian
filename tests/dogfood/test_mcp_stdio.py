@@ -234,7 +234,6 @@ Compiled from `{placeholder}`.
                         "relevance": {"brian-overview": 3},
                     },
                 ],
-                "confirmed": False,
             }
             preview = await session.call_tool("apply_knowledge_update", arguments)
             assert not preview.isError
@@ -247,7 +246,7 @@ Compiled from `{placeholder}`.
             cli_preview = await asyncio.to_thread(
                 subprocess.run,
                 [sys.executable, str(dogfood_root / "bin/wiki"), "knowledge", "update", "--input", "-"],
-                input=json.dumps({key: value for key, value in arguments.items() if key != "confirmed"}),
+                input=json.dumps(arguments),
                 text=True,
                 capture_output=True,
                 check=False,
@@ -255,7 +254,6 @@ Compiled from `{placeholder}`.
             assert cli_preview.returncode == 0, cli_preview.stderr
             assert json.loads(cli_preview.stdout) == preview.structuredContent
 
-            arguments["confirmed"] = True
             arguments["approval_digest"] = preview.structuredContent["approval_digest"]
             applied = await session.call_tool("apply_knowledge_update", arguments)
             assert not applied.isError
