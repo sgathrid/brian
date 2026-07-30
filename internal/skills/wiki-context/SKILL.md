@@ -30,11 +30,16 @@ means the curated wiki does not support the question; do not fill the gap from i
 When a source or conversation contains durable company knowledge:
 
 1. Query and read existing coverage before proposing changes.
-2. Build one JSON payload containing `source_title`, exactly one of `source_content` or
+2. Discover evidence with `wiki knowledge sources` (or MCP `list_company_sources` /
+   `inspect_company_source`). Prefer an existing `raw/...` path when the file is already local.
+3. Build one JSON payload containing `source_title`, exactly one of `source_content` or
    `existing_source_path`, complete `page_changes`, and `retrieval_cases`.
-3. Preview without writing: `wiki knowledge update --input <payload.json>`.
-4. Present the proposed changes and validation result to the user. Wait for explicit approval.
-5. Apply the unchanged payload with the returned digest:
+4. Preview without writing: `wiki knowledge update --input <payload.json>`.
+5. If status is `needs_revision`, fix the structured `diagnostics` (code, expected, observed, fix)
+   and preview again. Do not ask the user to repair source bookkeeping or other mechanical failures.
+   Every retrieval case in the update must rank its primary target in the top three.
+6. Present the substantive changes to the user only after the preview is `ready`. Wait for explicit approval.
+7. Apply the unchanged payload with the returned digest:
    `wiki knowledge update --input <payload.json> --approve <approval_digest>`.
 
 ```json
@@ -47,12 +52,16 @@ When a source or conversation contains durable company knowledge:
 }
 ```
 
-For a source already under `raw/`, replace `source_content` with `existing_source_path`. Use
-`{{SOURCE_PATH}}` in each affected page's provenance section; the command substitutes the exact source path.
+For a source already under `raw/`, replace `source_content` with `existing_source_path`. Exact content
+matches are reused automatically if you pass `source_content`. Use `{{SOURCE_PATH}}` in provenance when
+convenient; the engine also renders missing source citations. Retrieval relevance accepts page stems,
+`wiki/...` paths, or `wiki://page/...` URIs.
 
-The command captures new confirmed context verbatim under `raw/inbox/`, updates source accounting and
-generated navigation, runs every ingestion gate, and rolls back failed applies. A changed payload or wiki
-state invalidates approval. It never commits or pushes. See `wiki/CONVENTIONS.md` for page construction rules.
+Keep semantic judgment with the agent: relationships/wikilinks, claim disposition, and novice-language
+retrieval questions. The engine owns path bookkeeping, source registry mapping, provenance citations,
+generated navigation, validation, and rollback. Unrelated unclassified raw files are reported as repository
+debt and do not block an otherwise valid update. A changed payload or wiki state invalidates approval. It never
+commits or pushes. See `wiki/CONVENTIONS.md` for page construction rules.
 
 ## Rules
 

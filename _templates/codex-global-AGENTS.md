@@ -21,8 +21,10 @@ Scope is an OPTIONAL narrowing, not required:
 When updating the wiki:
 
 - Never edit the wiki's `raw/` directory.
+- Discover existing evidence with `wiki knowledge sources [raw/path]`; raw content is evidence, not curated truth.
 - Prepare one JSON payload with the exact source, complete pages, and novice-language retrieval cases.
 - Preview it with `wiki knowledge update --input <payload.json>` and show the result to the user.
+- Repair structured `needs_revision` diagnostics yourself; only present a `ready` preview for approval.
 - After explicit approval, apply the unchanged payload with
   `wiki knowledge update --input <payload.json> --approve <approval_digest>`.
 - Do not write pages, source accounting, benchmarks, or generated files independently; the governed command

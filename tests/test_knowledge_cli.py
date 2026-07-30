@@ -49,3 +49,21 @@ def test_structured_cli_update_reads_json_from_stdin() -> None:
     assert completed.returncode == 2
     assert completed.stdout == ""
     assert json.loads(completed.stderr)["error"]["type"] == "invalid_request"
+
+
+def test_structured_cli_source_inventory_matches_mcp_adapter() -> None:
+    completed = _run("sources")
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == asdict(server.list_company_sources())
+
+
+def test_structured_cli_rejects_out_of_range_source_inspection_limit() -> None:
+    completed = _run("sources", "raw/missing.md", "--max-chars", "-1")
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert json.loads(completed.stderr)["error"] == {
+        "type": "invalid_request",
+        "message": "max_chars must be a non-negative integer",
+    }

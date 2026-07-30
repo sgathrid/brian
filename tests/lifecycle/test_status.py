@@ -67,6 +67,7 @@ triggers = ["One"]
     assert "Record architecture decisions" in joined
     assert "unknown_rule" not in joined
     assert "high-signal" in joined
+    assert "TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, then start a new session." in joined
 
 
 def test_agent_behavior_lines_unset_proactivity_not_fake_selective(tmp_path: Path):
@@ -101,4 +102,5 @@ def test_run_status_prints_behavior_card(tmp_path: Path, capsys):
     assert "silent" in out
     assert "only update the wiki when the user asks" in out
     assert "label only" in out
+    assert "TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, then start a new session." in out
     assert "S Wiki Agent Status" in out

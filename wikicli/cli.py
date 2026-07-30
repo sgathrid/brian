@@ -9,7 +9,13 @@ from typing import Any
 
 from .core.audit import audit_wiki
 from .core.generate import generate_backlinks, generate_index, generate_registry, generate_tags
-from .core.ingest import PageChange, RetrievalCase, check_ingestion, update_knowledge
+from .core.ingest import (
+    apply_knowledge_update,
+    check_ingestion,
+    inspect_raw_source,
+    knowledge_update_request_from_dict,
+    list_raw_sources,
+)
 from .core.knowledge import query_company_knowledge, read_company_page
 from .core.page import WikiDatabase
 from .core.resolve import find_literal, find_tags, resolve_context, search_keywords
@@ -42,60 +48,15 @@ def _load_update_payload(path: str) -> dict[str, Any]:
         raise ValueError(f"update input is not valid JSON: {exc.msg}") from exc
     if not isinstance(payload, dict):
         raise TypeError("update input must be a JSON object")
-    allowed = {
-        "source_title",
-        "source_content",
-        "existing_source_path",
-        "source_type",
-        "page_changes",
-        "retrieval_cases",
-    }
-    unknown = sorted(set(payload) - allowed)
-    if unknown:
-        raise ValueError(f"unknown update field(s): {', '.join(unknown)}")
     return payload
 
 
 def _run_knowledge_update(repo_root: Path, payload: dict[str, Any], approval_digest: str | None) -> object:
-    try:
-        raw_pages = payload["page_changes"]
-        raw_cases = payload["retrieval_cases"]
-        source_title = payload["source_title"]
-    except (KeyError, TypeError) as exc:
-        raise ValueError(f"invalid update payload: {exc}") from exc
-    if not isinstance(source_title, str):
-        raise TypeError("source_title must be a string")
-    if not isinstance(raw_pages, list) or not all(
-        isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("content"), str)
-        for item in raw_pages
-    ):
-        raise TypeError("page_changes must contain objects with string path and content fields")
-    if not isinstance(raw_cases, list) or not all(
-        isinstance(item, dict) and isinstance(item.get("query"), str) and isinstance(item.get("relevance"), dict)
-        for item in raw_cases
-    ):
-        raise TypeError("retrieval_cases must contain objects with query and relevance fields")
-    page_changes = [PageChange(path=item["path"], content=item["content"]) for item in raw_pages]
-    retrieval_cases = [RetrievalCase(query=item["query"], relevance=item["relevance"]) for item in raw_cases]
-    source_content = payload.get("source_content")
-    existing_source_path = payload.get("existing_source_path")
-    source_type = payload.get("source_type", "user-confirmed context")
-    if source_content is not None and not isinstance(source_content, str):
-        raise TypeError("source_content must be a string or null")
-    if existing_source_path is not None and not isinstance(existing_source_path, str):
-        raise TypeError("existing_source_path must be a string or null")
-    if not isinstance(source_type, str):
-        raise TypeError("source_type must be a string")
-    return update_knowledge(
+    request = knowledge_update_request_from_dict(payload, approval_digest=approval_digest)
+    return apply_knowledge_update(
         repo_root,
-        source_title=source_title,
-        source_content=source_content,
-        existing_source_path=existing_source_path,
-        source_type=source_type,
-        page_changes=page_changes,
-        retrieval_cases=retrieval_cases,
-        confirmed=approval_digest is not None,
-        approval_digest=approval_digest,
+        request,
+        apply=request.approval_digest is not None,
     )
 
 
@@ -168,6 +129,21 @@ def main():
     p_knowledge_update.add_argument("--input", default="-", help="JSON payload path, or - for stdin")
     p_knowledge_update.add_argument(
         "--approve", metavar="DIGEST", help="Apply only the exact repository state and payload previously previewed"
+    )
+    p_knowledge_sources = knowledge_commands.add_parser(
+        "sources", help="List classified and unclassified raw sources as JSON"
+    )
+    p_knowledge_sources.add_argument(
+        "path",
+        nargs="?",
+        default="",
+        help="Optional raw/... path to inspect as evidence (not curated truth)",
+    )
+    p_knowledge_sources.add_argument(
+        "--max-chars",
+        type=int,
+        default=20000,
+        help="Maximum characters when inspecting one source (non-negative)",
     )
 
     # wiki hook session-start
@@ -255,14 +231,13 @@ def main():
             "Page modes: full / scope / orphans (delete knowledge pages). "
             "User settings (when available): wiki reset settings — restores stock "
             "wiki.toml packs/names without deleting pages. "
-            "Use 'factory' (or all --use-case-stock) for fresh-checkout company defaults. "
             "Natural-language triggers/instructions live under [upkeep] in wiki.toml."
         ),
     )
     p_reset.add_argument(
         "targets",
         nargs="*",
-        help="Mode: full | scope | orphans | settings [upkeep|identity|all|factory]",
+        help="Mode: full | scope | orphans | settings [upkeep|identity|all]",
     )
     p_reset.add_argument("--scope", default="", help="Target scope for scope reset")
     p_reset.add_argument("--dry-run", action="store_true", help="Preview without making changes")
@@ -280,9 +255,8 @@ def main():
     p_reset.add_argument(
         "--use-case-stock",
         action="store_true",
-        help="With settings all: force use_case=company (same as target 'factory')",
+        help="With settings all: also force use_case=company",
     )
-
 
     args = parser.parse_args()
 
@@ -372,11 +346,20 @@ def main():
         try:
             if args.knowledge_command == "query":
                 result = query_company_knowledge(repo_root, args.question, args.limit)
+                _print_json(asdict(result))
             elif args.knowledge_command == "read":
                 result = read_company_page(repo_root, args.path)
+                _print_json(asdict(result))
+            elif args.knowledge_command == "sources":
+                if args.path:
+                    _print_json(inspect_raw_source(repo_root, args.path, max_chars=args.max_chars))
+                else:
+                    _print_json({"sources": list_raw_sources(repo_root)})
             else:
                 result = _run_knowledge_update(repo_root, _load_update_payload(args.input), args.approve)
-            _print_json(asdict(result))
+                _print_json(asdict(result))
+                if getattr(result, "status", None) == "needs_revision":
+                    sys.exit(3)
         except (FileNotFoundError, TypeError, ValueError) as exc:
             _print_json({"error": {"type": "invalid_request", "message": str(exc)}}, stream=sys.stderr)
             sys.exit(2)

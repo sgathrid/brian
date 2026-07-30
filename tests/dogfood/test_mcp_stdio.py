@@ -105,6 +105,11 @@ def test_claude_desktop_launch_command_initializes_real_server() -> None:
 
 def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_path: Path) -> None:
     dogfood_root = _copy_dogfood_repo(tmp_path)
+    source = "# Exact heading\n\nUnicode: naïve → β\n\n```sql\nselect  *  from x;\n```\nNo trailing newline"
+    source_rel = "raw/dogfood-existing-source.md"
+    source_file = dogfood_root / source_rel
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_bytes(source.encode("utf-8"))
 
     async def exercise() -> None:
         environment = os.environ.copy()
@@ -123,11 +128,52 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             assert set(tools) == {
                 "query_company_knowledge",
                 "read_company_page",
+                "list_company_sources",
+                "inspect_company_source",
                 "apply_knowledge_update",
             }
             assert all(tool.outputSchema for tool in tools.values())
             assert tools["query_company_knowledge"].annotations.readOnlyHint is True
+            assert tools["list_company_sources"].annotations.readOnlyHint is True
+            assert tools["inspect_company_source"].annotations.readOnlyHint is True
             assert tools["apply_knowledge_update"].annotations.destructiveHint is True
+
+            source_list = await session.call_tool("list_company_sources", {})
+            assert not source_list.isError
+            source_rows = source_list.structuredContent["sources"]
+            assert any(
+                row["path"] == source_rel and row["status"] == "unclassified"
+                for row in source_rows
+            )
+            cli_sources = await asyncio.to_thread(
+                subprocess.run,
+                [sys.executable, str(dogfood_root / "bin/wiki"), "knowledge", "sources"],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert cli_sources.returncode == 0, cli_sources.stderr
+            assert json.loads(cli_sources.stdout) == source_list.structuredContent
+
+            inspected = await session.call_tool("inspect_company_source", {"path": source_rel})
+            assert not inspected.isError
+            assert inspected.structuredContent["content"] == source
+            assert inspected.structuredContent["label"] == "raw evidence — not curated company knowledge"
+            cli_inspected = await asyncio.to_thread(
+                subprocess.run,
+                [
+                    sys.executable,
+                    str(dogfood_root / "bin/wiki"),
+                    "knowledge",
+                    "sources",
+                    source_rel,
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert cli_inspected.returncode == 0, cli_inspected.stderr
+            assert json.loads(cli_inspected.stdout) == inspected.structuredContent
 
             query = await session.call_tool("query_company_knowledge", {"question": "wiki company info"})
             assert not query.isError
@@ -143,7 +189,6 @@ def test_real_stdio_server_queries_resources_errors_and_applies_losslessly(tmp_p
             resource = await session.read_resource("wiki://page/entities/brian-overview")
             assert "open-source, cross-LLM context engine" in resource.contents[0].text
 
-            source = "# Exact heading\n\nUnicode: naïve → β\n\n```sql\nselect  *  from x;\n```\nNo trailing newline"
             placeholder = "{{SOURCE_PATH}}"
             brian_path = dogfood_root / "wiki/entities/brian-overview.md"
             brian_content = brian_path.read_text(encoding="utf-8").replace(
@@ -173,7 +218,7 @@ Compiled from `{placeholder}`.
 """
             arguments = {
                 "source_title": "MCP lossless dogfood",
-                "source_content": source,
+                "existing_source_path": source_rel,
                 "source_type": "dogfood",
                 "page_changes": [
                     {"path": "wiki/entities/brian-overview.md", "content": brian_content},
@@ -195,7 +240,8 @@ Compiled from `{placeholder}`.
             assert not preview.isError
             assert preview.structuredContent["status"] == "ready"
             source_path = preview.structuredContent["source_path"]
-            assert not (dogfood_root / source_path).exists()
+            assert source_path == source_rel
+            assert (dogfood_root / source_path).read_text(encoding="utf-8") == source
             assert not (dogfood_root / "wiki/concepts/dogfood-knowledge.md").exists()
 
             cli_preview = await asyncio.to_thread(
@@ -214,6 +260,7 @@ Compiled from `{placeholder}`.
             applied = await session.call_tool("apply_knowledge_update", arguments)
             assert not applied.isError
             assert applied.structuredContent["status"] == "applied"
+            assert applied.structuredContent["source_path"] == source_rel
             assert (dogfood_root / source_path).read_text(encoding="utf-8") == source
 
     asyncio.run(exercise())

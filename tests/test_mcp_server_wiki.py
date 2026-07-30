@@ -70,12 +70,20 @@ def test_read_rejects_paths_outside_curated_wiki(mcp_repo: Path, path: str) -> N
         server.read_company_page(path)
 
 
-def test_mcp_exposes_three_typed_tools_with_behavior_annotations() -> None:
+def test_mcp_exposes_typed_tools_with_behavior_annotations() -> None:
     tools = {tool.name: tool for tool in asyncio.run(server.mcp.list_tools())}
 
-    assert set(tools) == {"query_company_knowledge", "read_company_page", "apply_knowledge_update"}
+    assert set(tools) == {
+        "query_company_knowledge",
+        "read_company_page",
+        "list_company_sources",
+        "inspect_company_source",
+        "apply_knowledge_update",
+    }
     assert tools["query_company_knowledge"].annotations.readOnlyHint is True
     assert tools["read_company_page"].annotations.readOnlyHint is True
+    assert tools["list_company_sources"].annotations.readOnlyHint is True
+    assert tools["inspect_company_source"].annotations.readOnlyHint is True
     assert tools["apply_knowledge_update"].annotations.destructiveHint is True
     assert tools["apply_knowledge_update"].annotations.idempotentHint is False
     assert "hits" in tools["query_company_knowledge"].outputSchema["properties"]
@@ -91,14 +99,22 @@ def test_invalid_mcp_read_is_reported_as_tool_error(mcp_repo: Path) -> None:
         asyncio.run(server.mcp.call_tool("read_company_page", {"path": "../outside"}))
 
 
+def test_mcp_rejects_out_of_range_source_inspection_limit(mcp_repo: Path) -> None:
+    (mcp_repo / "raw").mkdir()
+    (mcp_repo / "raw/source.md").write_text("evidence", encoding="utf-8")
+
+    with pytest.raises(ToolError, match="max_chars"):
+        asyncio.run(server.mcp.call_tool("inspect_company_source", {"path": "raw/source.md", "max_chars": -1}))
+
+
 def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_update(root: Path, **kwargs: object) -> KnowledgeUpdateResult:
-        captured.update(root=root, **kwargs)
+    def fake_update(root: Path, request: object, *, apply: bool | None = None) -> KnowledgeUpdateResult:
+        captured.update(root=root, request=request, apply=apply)
         return KnowledgeUpdateResult("ready", "raw/one.md", ["wiki/concepts/one.md"], ["validated"], "digest")
 
-    monkeypatch.setattr(server, "update_knowledge", fake_update)
+    monkeypatch.setattr(server, "apply_update_request", fake_update)
     changes = [PageChange("wiki/concepts/one.md", "complete page")]
     cases = [RetrievalCase("what is one", {"one": 3})]
 
@@ -110,6 +126,7 @@ def test_update_tool_forwards_one_governed_payload(monkeypatch: pytest.MonkeyPat
     )
 
     assert result.status == "ready"
-    assert captured["page_changes"] == changes
-    assert captured["existing_source_path"] == "raw/one.md"
-    assert captured["confirmed"] is False
+    request = captured["request"]
+    assert request.page_changes == changes
+    assert request.existing_source_path == "raw/one.md"
+    assert captured["apply"] is None

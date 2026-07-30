@@ -67,6 +67,10 @@ def _agent_behavior_lines(repo_root: Path) -> list[str]:
         f"    {C_DIM}label only — session behavior = triggers + instructions{C_RESET}",
         f"    rules: {rules}",
         f"    triggers: {n_triggers}",
+        (
+            f"    {C_DIM}TIP: Edit [upkeep] in wiki.toml; run `wiki status` to verify, "
+            f"then start a new session.{C_RESET}"
+        ),
     ]
 
 
