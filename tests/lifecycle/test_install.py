@@ -22,8 +22,11 @@ import pytest
 
 from wikicli.lifecycle.install import _set_codex_features_hooks, _strip_codex_wiki_hooks, run_install
 from wikicli.lifecycle.integrations import (
+    SUPPORTED_AGENTS,
     _is_wiki_hook,
+    gemini_folder_trust,
     integration_state,
+    record_owned_values,
 )
 from wikicli.lifecycle.status import run_status
 from wikicli.lifecycle.uninstall import run_uninstall
@@ -399,9 +402,482 @@ class TestGemini:
     def test_installs_skill_and_documented_workspace_access(self, fake_home: Path):
         assert run_install(repo_root(), ["gemini"])
         data = json.loads((fake_home / ".gemini/settings.json").read_text())
-        assert str(repo_root()) in data["context"]["includeDirectories"]
         assert str(repo_root()) in data["tools"]["sandboxAllowedPaths"]
+        # Gemini rejects an included directory whose folder trust resolves to false, and the wiki
+        # contract runs through the CLI, so the installer claims no workspace context entry.
+        assert str(repo_root()) not in data.get("context", {}).get("includeDirectories", [])
         assert (fake_home / ".gemini/skills/wiki-context").resolve() == repo_root() / "internal/skills/wiki-context"
+
+    def test_reinstall_drops_owned_include_directory_and_keeps_foreign_entries(self, fake_home: Path):
+        settings = fake_home / ".gemini/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(
+            json.dumps({"context": {"includeDirectories": [str(repo_root()), "/keep"]}}), encoding="utf-8"
+        )
+        state = fake_home / ".local/state/brian-wiki/install.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(
+            json.dumps({"gemini": {"context.includeDirectories": [str(repo_root())], "createdFiles": ["/x"]}}),
+            encoding="utf-8",
+        )
+
+        assert run_install(repo_root(), ["gemini"])
+
+        assert json.loads(settings.read_text())["context"]["includeDirectories"] == ["/keep"]
+        gemini_state = json.loads(state.read_text())["gemini"]
+        assert "context.includeDirectories" not in gemini_state
+        assert gemini_state["createdFiles"] == ["/x"]
+
+    def test_migration_keeps_state_for_other_agents(self, fake_home: Path):
+        settings = fake_home / ".gemini/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(
+            json.dumps(
+                {
+                    "context": {"includeDirectories": [str(repo_root())]},
+                    "tools": {"sandboxAllowedPaths": [str(repo_root())]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        state = fake_home / ".local/state/brian-wiki/install.json"
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(
+            json.dumps(
+                {
+                    "claude": {"permissions.additionalDirectories": [str(repo_root())]},
+                    "gemini": {"context.includeDirectories": [str(repo_root())]},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        assert run_install(repo_root(), ["gemini"])
+
+        data = json.loads(state.read_text())
+        assert data["claude"]["permissions.additionalDirectories"] == [str(repo_root())]
+        assert "gemini" not in data
+
+    def test_warns_when_folder_trust_distrusts_the_repo(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".gemini/trustedFolders.json").write_text(
+            json.dumps({str(repo_root().parent): "DO_NOT_TRUST"}), encoding="utf-8"
+        )
+
+        assert run_install(repo_root(), ["gemini"])
+
+        out = capsys.readouterr().out
+        assert "Gemini runs restricted inside this folder" in out
+        assert f"untrusted through the rule on {repo_root().parent}" in out
+        assert "wiki install gemini --trust-folder" in out
+        assert f'"{repo_root()}": "TRUST_FOLDER"' in out
+        # An advisory must not silently change the user's trust settings.
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST"
+        }
+
+    def test_stays_quiet_when_the_repo_is_trusted(self, fake_home: Path, capsys: pytest.CaptureFixture[str]):
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".gemini/trustedFolders.json").write_text(
+            json.dumps({str(repo_root().parent): "DO_NOT_TRUST", str(repo_root()): "TRUST_FOLDER"}), encoding="utf-8"
+        )
+
+        assert run_install(repo_root(), ["gemini"])
+
+        assert "runs restricted" not in capsys.readouterr().out
+
+    def test_trust_folder_flag_writes_the_rule_and_keeps_the_others(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        trust_file = fake_home / ".gemini/trustedFolders.json"
+        trust_file.parent.mkdir(parents=True, exist_ok=True)
+        trust_file.write_text(json.dumps({str(repo_root().parent): "DO_NOT_TRUST"}), encoding="utf-8")
+
+        assert run_install(repo_root(), ["gemini"], trust_folder=True)
+
+        assert json.loads(trust_file.read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST",
+            str(repo_root()): "TRUST_FOLDER",
+        }
+        state = json.loads((fake_home / ".local/state/brian-wiki/install.json").read_text())
+        assert state["gemini"]["trustedFolders"] == [str(repo_root())]
+        assert "trusted this folder" in capsys.readouterr().out
+
+    def test_trust_folder_flag_creates_an_owner_only_trust_file(self, fake_home: Path):
+        assert run_install(repo_root(), ["gemini"], trust_folder=True)
+
+        trust_file = fake_home / ".gemini/trustedFolders.json"
+        assert json.loads(trust_file.read_text()) == {str(repo_root()): "TRUST_FOLDER"}
+        assert trust_file.stat().st_mode & 0o777 == 0o600
+
+    def test_uninstall_reverts_only_the_trust_it_wrote(self, fake_home: Path):
+        trust_file = fake_home / ".gemini/trustedFolders.json"
+        trust_file.parent.mkdir(parents=True, exist_ok=True)
+        trust_file.write_text(json.dumps({"/elsewhere": "TRUST_FOLDER"}), encoding="utf-8")
+
+        assert run_install(repo_root(), ["gemini"], trust_folder=True)
+        run_uninstall(repo_root(), ["gemini"], purge_backups=True)
+
+        assert json.loads(trust_file.read_text()) == {"/elsewhere": "TRUST_FOLDER"}
+
+    def test_uninstall_keeps_trust_the_user_granted(self, fake_home: Path):
+        trust_file = fake_home / ".gemini/trustedFolders.json"
+        trust_file.parent.mkdir(parents=True, exist_ok=True)
+        trust_file.write_text(json.dumps({str(repo_root()): "TRUST_FOLDER"}), encoding="utf-8")
+
+        assert run_install(repo_root(), ["gemini"])
+        run_uninstall(repo_root(), ["gemini"], purge_backups=True)
+
+        assert json.loads(trust_file.read_text()) == {str(repo_root()): "TRUST_FOLDER"}
+
+    def test_preserves_unowned_include_directory(self, fake_home: Path):
+        settings = fake_home / ".gemini/settings.json"
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps({"context": {"includeDirectories": [str(repo_root())]}}), encoding="utf-8")
+
+        assert run_install(repo_root(), ["gemini"])
+
+        assert json.loads(settings.read_text())["context"]["includeDirectories"] == [str(repo_root())]
+
+
+class TestGeminiFolderTrust:
+    """Longest matching rule decides, mirroring isPathTrusted in gemini-cli 0.53."""
+
+    @staticmethod
+    def write_rules(home: Path, rules: dict[str, str]) -> None:
+        (home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (home / ".gemini/trustedFolders.json").write_text(json.dumps(rules), encoding="utf-8")
+
+    def test_no_rules_leaves_trust_undecided(self, fake_home: Path):
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (None, None)
+
+    def test_distrusted_ancestor_applies_to_descendants(self, fake_home: Path):
+        self.write_rules(fake_home, {"/a": "DO_NOT_TRUST"})
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (False, "/a")
+
+    def test_longer_trust_rule_beats_distrusted_ancestor(self, fake_home: Path):
+        self.write_rules(fake_home, {"/a": "DO_NOT_TRUST", "/a/b/repo": "TRUST_FOLDER"})
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (True, "/a/b/repo")
+
+    def test_trust_parent_applies_to_the_rule_parent_directory(self, fake_home: Path):
+        self.write_rules(fake_home, {"/a/b/sibling": "TRUST_PARENT"})
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (True, "/a/b/sibling")
+
+    def test_sibling_prefix_does_not_match(self, fake_home: Path):
+        self.write_rules(fake_home, {"/a/b/repo-two": "DO_NOT_TRUST"})
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (None, None)
+
+    def test_invalid_rules_are_ignored(self, fake_home: Path):
+        self.write_rules(fake_home, {"/a": "MAYBE"})
+        assert gemini_folder_trust(Path("/a/b/repo"), fake_home) == (None, None)
+
+
+class TestGeminiTrustDecision:
+    """A trust answer is a per-repo setting, so the installer records it instead of re-asking."""
+
+    @staticmethod
+    def distrust_parent(home: Path) -> None:
+        (home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (home / ".gemini/trustedFolders.json").write_text(
+            json.dumps({str(repo_root().parent): "DO_NOT_TRUST"}), encoding="utf-8"
+        )
+
+    @staticmethod
+    def answer(monkeypatch: pytest.MonkeyPatch, choice: str) -> None:
+        """Stand in for a terminal: the installer only asks when one is there to answer."""
+        monkeypatch.setattr("wikicli.lifecycle.install.is_tty", lambda: True)
+        monkeypatch.setattr("wikicli.lifecycle.install.run_choice", lambda *args, **kwargs: choice)
+
+    @staticmethod
+    def refuse_to_ask(monkeypatch: pytest.MonkeyPatch, terminal: bool = True) -> None:
+        def fail(*args: object, **kwargs: object) -> str:
+            raise AssertionError("the folder-trust question was asked again")
+
+        monkeypatch.setattr("wikicli.lifecycle.install.is_tty", lambda: terminal)
+        monkeypatch.setattr("wikicli.lifecycle.install.run_choice", fail)
+
+    @staticmethod
+    def state(home: Path) -> dict:
+        path = home / ".local/state/brian-wiki/install.json"
+        return json.loads(path.read_text()) if path.is_file() else {}
+
+    def test_declining_for_good_changes_nothing_but_records_the_decision(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST"
+        }
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+        assert "stopped asking for this folder" in capsys.readouterr().out
+
+    def test_a_recorded_decline_is_never_asked_again(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        capsys.readouterr()
+
+        self.refuse_to_ask(monkeypatch)
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        out = capsys.readouterr().out
+        assert "asked not to be prompted" in out
+        assert "wiki install gemini --trust-folder" in out
+
+    def test_not_now_records_nothing_and_asks_again(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "no")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+        capsys.readouterr()
+
+        asked = []
+        monkeypatch.setattr("wikicli.lifecycle.install.run_choice", lambda *a, **k: asked.append(True) or "no")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        assert asked, "a deferred answer must be asked again"
+        assert "Two ways to fix it" in capsys.readouterr().out
+
+    def test_gemini_own_answer_for_this_folder_is_left_alone(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        (fake_home / ".gemini").mkdir(parents=True, exist_ok=True)
+        (fake_home / ".gemini/trustedFolders.json").write_text(
+            json.dumps({str(repo_root()): "DO_NOT_TRUST"}), encoding="utf-8"
+        )
+        self.refuse_to_ask(monkeypatch)
+
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        out = capsys.readouterr().out
+        assert "marks this exact folder DO_NOT_TRUST" in out
+        assert "wiki install gemini --trust-folder" in out
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {str(repo_root()): "DO_NOT_TRUST"}
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+
+    def test_trust_folder_flag_overrides_and_clears_a_recorded_decline(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        assert run_install(repo_root(), ["gemini"], trust_folder=True)
+
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST",
+            str(repo_root()): "TRUST_FOLDER",
+        }
+        gemini_state = self.state(fake_home)["gemini"]
+        assert "trustDeclined" not in gemini_state
+        assert gemini_state["trustedFolders"] == [str(repo_root())]
+
+    def test_no_trust_folder_flag_records_the_decline_without_a_prompt(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.refuse_to_ask(monkeypatch)
+
+        assert run_install(repo_root(), ["gemini"], non_interactive=True, trust_folder=False)
+
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST"
+        }
+
+    def test_no_trust_folder_flag_stays_silent_when_nothing_blocks(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+
+        assert run_install(repo_root(), ["gemini"], non_interactive=True, trust_folder=False)
+
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+        assert "refuse" not in capsys.readouterr().out
+
+    def test_non_interactive_install_neither_asks_nor_records(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.refuse_to_ask(monkeypatch)
+
+        assert run_install(repo_root(), ["gemini"], non_interactive=True, named_targets=True)
+
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+        assert "Gemini runs restricted inside this folder" in capsys.readouterr().out
+
+    def test_a_sweeping_install_advises_instead_of_asking(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """`wiki install` / `install all` carry Gemini along; only naming it earns the question."""
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.refuse_to_ask(monkeypatch)
+
+        assert run_install(repo_root(), ["gemini"])
+
+        out = capsys.readouterr().out
+        assert "Gemini runs restricted inside this folder" in out
+        assert "wiki install gemini --trust-folder" in out
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+
+    def test_ask_trust_forgets_the_record_and_asks_again(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+
+        self.answer(monkeypatch, "yes")
+        assert run_install(repo_root(), ["gemini"], ask_trust=True)
+
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST",
+            str(repo_root()): "TRUST_FOLDER",
+        }
+        assert "trustDeclined" not in self.state(fake_home)["gemini"]
+
+    def test_ask_trust_asks_even_when_no_target_was_named(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch):
+        """Requesting the question is itself the intent the named-target gate looks for."""
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+
+        assert run_install(repo_root(), ["gemini"], ask_trust=True)
+
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+
+    def test_ask_trust_keeps_the_answer_when_there_is_no_terminal_to_ask(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        """Forgetting first would destroy the answer in a run that can never collect a new one."""
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        capsys.readouterr()
+
+        self.refuse_to_ask(monkeypatch, terminal=False)
+        assert run_install(repo_root(), ["gemini"], ask_trust=True)
+
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+        assert "--ask-trust needs an interactive terminal" in capsys.readouterr().out
+
+        # Same for -y, which cannot answer a prompt even with a terminal attached.
+        self.refuse_to_ask(monkeypatch, terminal=True)
+        assert run_install(repo_root(), ["gemini"], non_interactive=True, ask_trust=True)
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+
+    def test_deferring_after_ask_trust_drops_the_record_so_it_asks_again(
+        self, fake_home: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        self.answer(monkeypatch, "no")
+        assert run_install(repo_root(), ["gemini"], ask_trust=True)
+
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+
+    def test_forget_trust_choice_keeps_every_integration(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        capsys.readouterr()
+
+        run_uninstall(repo_root(), ["gemini"], forget_trust_choice=True)
+
+        out = capsys.readouterr().out
+        assert "forgot the remembered folder-trust answer" in out
+        assert "Every integration was left in place" in out
+        assert "trustDeclined" not in self.state(fake_home).get("gemini", {})
+        settings = json.loads((fake_home / ".gemini/settings.json").read_text())
+        assert settings["hooks"]["SessionStart"], "the hook must survive forgetting one answer"
+        assert settings["tools"]["sandboxAllowedPaths"] == [str(repo_root())]
+
+    def test_forget_trust_choice_dry_run_changes_nothing(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        capsys.readouterr()
+
+        run_uninstall(repo_root(), ["gemini"], dry_run=True, forget_trust_choice=True)
+
+        assert "would forget" in capsys.readouterr().out
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [str(repo_root())]
+
+    def test_forget_trust_choice_reports_when_there_is_nothing_to_forget(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        run_uninstall(repo_root(), ["gemini"], forget_trust_choice=True)
+
+        assert "no remembered folder-trust answer" in capsys.readouterr().out
+
+    def test_forgetting_one_checkout_keeps_another_checkouts_answer(self, fake_home: Path):
+        """The state file is shared by every checkout, so a decline is dropped by value."""
+        other = "/Users/someone/another-wiki"
+        record_owned_values(fake_home, "gemini", "trustDeclined", [other, str(repo_root())])
+
+        run_uninstall(repo_root(), ["gemini"], forget_trust_choice=True)
+
+        assert self.state(fake_home)["gemini"]["trustDeclined"] == [other]
+
+    def test_uninstall_forgets_the_recorded_decline(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+
+        run_uninstall(repo_root(), ["gemini"], purge_backups=True)
+
+        assert "gemini" not in self.state(fake_home)
+        assert json.loads((fake_home / ".gemini/trustedFolders.json").read_text()) == {
+            str(repo_root().parent): "DO_NOT_TRUST"
+        }
+
+    def test_status_reports_a_remembered_decline_distinctly(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.delenv("GEMINI_CLI_TRUST_WORKSPACE", raising=False)
+        self.distrust_parent(fake_home)
+        run_status(repo_root())
+        assert "you declined trust" not in capsys.readouterr().out
+
+        self.answer(monkeypatch, "never")
+        assert run_install(repo_root(), ["gemini"], named_targets=True)
+        capsys.readouterr()
+
+        run_status(repo_root())
+
+        out = capsys.readouterr().out
+        assert "you declined trust for this folder" in out
+        assert "wiki install gemini --trust-folder" in out
 
 
 class TestAntigravity:
@@ -810,6 +1286,74 @@ class TestUninstall:
         assert claude.is_file()
         assert json.loads(claude.read_text(encoding="utf-8")) == {"permissions": {}}
         assert "wiki" not in claude.read_text(encoding="utf-8")
+
+    def test_uninstall_from_a_clean_home_leaves_no_files_behind(self, fake_home: Path):
+        """A full install into an untouched home must uninstall without a trace."""
+        assert run_install(repo_root(), ["all"], non_interactive=True, trust_folder=True)
+        assert (fake_home / ".gemini/trustedFolders.json").is_file()
+
+        run_uninstall(repo_root(), ["all"], purge_backups=True, non_interactive=True)
+
+        leftovers = sorted(
+            str(path.relative_to(fake_home)) for path in fake_home.rglob("*") if path.is_symlink() or path.is_file()
+        )
+        assert leftovers == []
+        # Agent-owned directories stay; the ones this installer creates are pruned while empty.
+        assert (fake_home / ".gemini").is_dir()
+        assert not (fake_home / ".gemini/skills").exists()
+        assert not (fake_home / ".local/state/brian-wiki").exists()
+
+    def test_staged_uninstall_still_prunes_once_the_last_integration_goes(self, fake_home: Path):
+        """Shared cleanup is deferred, not lost, when agents are removed one batch at a time."""
+        assert run_install(repo_root(), ["all"], non_interactive=True, trust_folder=True)
+
+        run_uninstall(repo_root(), ["gemini"], purge_backups=True)
+        assert (fake_home / ".local/state/brian-wiki/install.json").is_file(), "shared record must survive"
+
+        rest = [agent for agent in SUPPORTED_AGENTS if agent != "gemini"]
+        run_uninstall(repo_root(), rest, purge_backups=True)
+
+        leftovers = sorted(
+            str(path.relative_to(fake_home)) for path in fake_home.rglob("*") if path.is_symlink() or path.is_file()
+        )
+        assert leftovers == []
+        assert not (fake_home / ".gemini/skills").exists()
+        assert not (fake_home / ".local/state/brian-wiki").exists()
+
+    def test_uninstall_keeps_empty_directories_it_did_not_create(self, fake_home: Path):
+        preexisting = fake_home / ".gemini/skills"
+        preexisting.mkdir(parents=True)
+
+        assert run_install(repo_root(), ["all"], non_interactive=True)
+        run_uninstall(repo_root(), ["all"], purge_backups=True, non_interactive=True)
+
+        assert preexisting.is_dir(), "an empty directory the user already had must survive"
+
+    def test_dry_run_reports_prunable_directories_without_removing_them(
+        self, fake_home: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        assert run_install(repo_root(), ["all"], non_interactive=True)
+        capsys.readouterr()
+
+        run_uninstall(repo_root(), ["all"], dry_run=True, purge_backups=True, non_interactive=True)
+
+        out = capsys.readouterr().out
+        assert "[dry run] would remove up to" in out and "director(ies) we created" in out
+        assert "[dry run] would remove wiki binary symlink" in out
+        # Preview only: every path it named is still there.
+        assert (fake_home / ".gemini/skills").is_dir()
+        assert (fake_home / ".local/state/brian-wiki").is_dir()
+        assert (fake_home / ".local/bin/wiki").is_symlink()
+
+    def test_uninstall_keeps_directories_that_still_hold_foreign_files(self, fake_home: Path):
+        foreign = fake_home / ".gemini/skills/other-skill"
+        foreign.mkdir(parents=True)
+        (foreign / "SKILL.md").write_text("keep me", encoding="utf-8")
+
+        assert run_install(repo_root(), ["all"], non_interactive=True)
+        run_uninstall(repo_root(), ["all"], purge_backups=True, non_interactive=True)
+
+        assert (foreign / "SKILL.md").read_text(encoding="utf-8") == "keep me"
 
     def test_full_roundtrip_preserves_every_foreign_setting_and_user_backup(self, fake_home: Path):
         from wikicli.lifecycle.integrations import get_claude_desktop_config_path

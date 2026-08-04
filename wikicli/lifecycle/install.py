@@ -7,10 +7,11 @@ import shutil
 import tomllib
 from pathlib import Path
 
-from ..ui.menu import run_menu
+from ..ui.menu import is_tty, run_choice, run_menu
 from .integrations import (
     AGENT_REGISTRY,
     SUPPORTED_AGENTS,
+    TRUST_DECLINED,
     _set_codex_features_hooks,
     _set_codex_writable_root,
     _strip_codex_wiki_hooks,
@@ -21,11 +22,18 @@ from .integrations import (
     atomic_write_json,
     backup_path,
     claude_desktop_server_config,
+    discard_json_list,
     ensure_antigravity_import,
+    forget_owned_setting,
+    forget_owned_value,
+    gemini_trust_decision,
+    gemini_trust_folder,
     get_claude_desktop_config_path,
     get_detection_path,
     integration_state,
     link_repo_artifact,
+    load_install_state,
+    prunable_dirs,
     record_owned_values,
 )
 
@@ -41,8 +49,132 @@ S_DOT_ORANGE = f"{C_ORANGE}●{C_RESET}"
 S_CROSS_RED = f"{C_RED}✕{C_RESET}"
 
 
-def run_install(repo_root: Path, targets: list[str], non_interactive: bool = False) -> bool:
-    """Executes installation for specified agent targets."""
+def _resolve_gemini_trust(
+    root: str,
+    decision: str,
+    rule: str | None,
+    home: Path,
+    repo_root: Path,
+    trust_folder: bool | None,
+    asked_for: bool,
+    ask_trust: bool,
+    non_interactive: bool,
+) -> bool:
+    """Grant trust, remember a decline, or spell out the manual fix. False only on a failed write."""
+
+    def explain_block() -> None:
+        # gemini-cli 0.53 does not exit here, and no shipped version emits the "not running in a
+        # trusted directory" line the earlier copy quoted: it starts restricted and gates the hooks it
+        # loads from settings ("Project hooks disabled because the folder is not trusted").
+        print(f"│    {S_TRIANGLE_ORANGE} Gemini runs restricted inside this folder")
+        print(f"│      Your Gemini settings mark it untrusted through the rule on {rule}. Restricted mode gates")
+        print("│      the hooks Gemini loads from settings, so the wiki context may not load here.")
+
+    def explain_manual_fix() -> None:
+        print("│      Two ways to fix it whenever you are ready:")
+        print("│        1. run this command:  wiki install gemini --trust-folder")
+        print("│        2. or open ~/.gemini/trustedFolders.json and add this line between the braces:")
+        print(f'│             "{root}": "TRUST_FOLDER"')
+        print("│      Trusting a folder lets Gemini load settings and hooks from it, so only trust repos you own.")
+
+    # The flags decide outright; otherwise only an inherited block is worth a question. A rule naming
+    # this exact folder is the user's own answer to Gemini's trust dialog, and a decline recorded by
+    # an earlier run is this question already asked and answered. `asked_for` keeps the question tied
+    # to intent: changing another tool's security settings is offered when you name Gemini, not when
+    # Gemini rides along with an install of something else.
+    choice = {True: "yes", False: "never", None: None}[trust_folder]
+    # `--ask-trust` only reopens a remembered answer when an answer can actually be collected. Without
+    # a terminal there is nobody to ask, and forgetting first would destroy the answer unprompted.
+    can_ask = not non_interactive and is_tty()
+    if ask_trust and decision == "declined" and can_ask:
+        decision = "prompt"
+    explained = False
+    if choice is None and decision == "prompt" and asked_for and can_ask:
+        explain_block()
+        explained = True
+        choice = run_choice(
+            "Let Gemini trust this folder so wiki context works here?",
+            [
+                ("yes", "Yes", f'add "{root}": "TRUST_FOLDER" to ~/.gemini/trustedFolders.json'),
+                # id "no" so run_menu's y/n keys both land: `n` selects this, `never` needs the arrows.
+                ("no", "Not now", "leave my Gemini trust settings unchanged, ask again next install"),
+                ("never", "No, don't ask again", "leave them unchanged and stop asking for this folder"),
+            ],
+            default_id="no",
+        )
+
+    if choice == "yes":
+        if rule and not explained:
+            print(f"│    {S_TRIANGLE_ORANGE} Gemini runs restricted here, untrusted via the rule on {rule}")
+        trust_file = home / ".gemini" / "trustedFolders.json"
+        trust_file_existed = trust_file.is_file()
+        outcome = gemini_trust_folder(repo_root, home)
+        if outcome in ("added", "present"):
+            # An explicit grant supersedes any remembered decline, so the record cannot outlive it.
+            forget_owned_value(home, "gemini", TRUST_DECLINED, root)
+        if outcome == "added":
+            record_owned_values(home, "gemini", "trustedFolders", [root])
+            if not trust_file_existed:
+                record_owned_values(home, "gemini", "createdFiles", [str(trust_file)])
+            print(f"│    {S_CHECK_GREEN} trusted this folder in ~/.gemini/trustedFolders.json")
+            print("│      undo it any time with `wiki uninstall gemini`")
+            return True
+        if outcome == "present":
+            print(f"│    {S_CHECK_GREEN} this folder is already trusted in ~/.gemini/trustedFolders.json")
+            return True
+        print(f"│    {S_CROSS_RED} could not write ~/.gemini/trustedFolders.json; add this line by hand:")
+        print(f'│        "{root}": "TRUST_FOLDER"')
+        return False
+
+    if decision == "gemini":
+        print(f"│    {S_TRIANGLE_ORANGE} Gemini runs restricted inside this folder")
+        print("│      ~/.gemini/trustedFolders.json marks this exact folder DO_NOT_TRUST — your own answer")
+        print("│      to Gemini's trust dialog — so this installer leaves that decision alone.")
+        explain_manual_fix()
+        return True
+
+    if choice == "never":
+        record_owned_values(home, "gemini", TRUST_DECLINED, [root])
+        if not explained:
+            print(f"│    {S_TRIANGLE_ORANGE} Gemini runs restricted here, untrusted via the rule on {rule}")
+        print(f"│    {S_DOT_ORANGE} left your Gemini trust settings unchanged and stopped asking for this folder")
+        print("│      grant it any time with `wiki install gemini --trust-folder`")
+        return True
+
+    if choice == "no":
+        # Deferring after asking to be asked again means keep asking: the record must not survive it.
+        forget_owned_value(home, "gemini", TRUST_DECLINED, root)
+
+    if decision == "declined":
+        print(f"│    {S_TRIANGLE_ORANGE} Gemini still runs restricted here, untrusted via the rule on {rule}")
+        print(f"│    {S_DOT_ORANGE} you asked not to be prompted about trusting this folder again")
+        if ask_trust:
+            print("│      --ask-trust needs an interactive terminal, so your answer was kept as it was")
+        print("│      grant it with `wiki install gemini --trust-folder`, or be asked once more with")
+        print("│      `wiki install gemini --ask-trust`; `wiki uninstall gemini --forget-trust-choice` forgets it")
+        return True
+
+    if rule and not explained:
+        explain_block()
+    explain_manual_fix()
+    return True
+
+
+def run_install(
+    repo_root: Path,
+    targets: list[str],
+    non_interactive: bool = False,
+    trust_folder: bool | None = None,
+    ask_trust: bool = False,
+    named_targets: bool = False,
+) -> bool:
+    """Executes installation for specified agent targets.
+
+    `trust_folder` is tri-state: True grants Gemini folder trust, False records a decline so later
+    runs stop asking, and None leaves the decision to the prompt. `ask_trust` forgets a recorded
+    decline and asks once more. `named_targets` says the caller spelled the agents out, which is
+    what earns the folder-trust question: a run that merely swept Gemini up only advises.
+    """
     home = Path.home()
     if targets and "all" in targets:
         selected_targets = list(SUPPORTED_AGENTS)
@@ -75,6 +207,9 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
     if not selected_targets:
         print("No integrations selected.")
         return True
+
+    # Noted before any directory is created so uninstall prunes only what this run added.
+    absent_dirs = [path for path in prunable_dirs(home) if not path.exists()]
 
     local_bin = home / ".local" / "bin"
     local_bin.mkdir(parents=True, exist_ok=True)
@@ -259,8 +394,12 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
                 )
                 gdata["hooks"]["SessionStart"] = gkept
                 root = str(repo_root.resolve())
-                context_added = add_json_list(gdata, ("context", "includeDirectories"), [root])
                 sandbox_added = add_json_list(gdata, ("tools", "sandboxAllowedPaths"), [root])
+                # Earlier versions also added the repo to context.includeDirectories. Gemini rejects an
+                # included directory whose folder trust resolves to false, and the wiki contract runs
+                # through the CLI rather than file tools, so drop the entries this installer owns.
+                owned_context = load_install_state(home).get("gemini", {}).get("context.includeDirectories", [])
+                context_removed = discard_json_list(gdata, ("context", "includeDirectories"), owned_context)
             except (AttributeError, OSError, TypeError, json.JSONDecodeError) as e:
                 print(f"│    {S_CROSS_RED} preserved unreadable or invalid ~/.gemini/settings.json: {e}")
                 success = False
@@ -270,12 +409,30 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
             if gsettings.is_file():
                 shutil.copy2(gsettings, backup_path(gsettings))
             gsettings.write_text(json.dumps(gdata, indent=2), encoding="utf-8")
-            record_owned_values(home, "gemini", "context.includeDirectories", context_added)
             record_owned_values(home, "gemini", "tools.sandboxAllowedPaths", sandbox_added)
             if not settings_existed:
                 record_owned_values(home, "gemini", "createdFiles", [str(gsettings)])
+            if context_removed:
+                forget_owned_setting(home, "gemini", "context.includeDirectories")
+                print(
+                    f"│    {S_CHECK_GREEN} removed the repo from context.includeDirectories (the CLI needs no workspace entry)"
+                )
             gverb = f"replaced {greplaced} stale" if greplaced else "added"
             print(f"│    {S_CHECK_GREEN} {gverb} SessionStart hook in ~/.gemini/settings.json")
+            # Folder trust is enabled by default and gates the hook, settings, and tools in this repo.
+            trust_decision, blocking_rule = gemini_trust_decision(repo_root, home)
+            if (trust_decision != "clear" or trust_folder is True) and not _resolve_gemini_trust(
+                root,
+                trust_decision,
+                blocking_rule,
+                home,
+                repo_root,
+                trust_folder,
+                named_targets or ask_trust,
+                ask_trust,
+                non_interactive,
+            ):
+                success = False
             if not link_repo_artifact(
                 repo_root / "internal/skills/wiki-context", g_dir / "skills/wiki-context", repo_root
             ):
@@ -307,7 +464,10 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
                     print(f"│    {S_CHECK_GREEN} added instructions to ~/.copilot/copilot-instructions.md")
                 else:
                     print(f"│    {S_CHECK_GREEN} instructions already present in ~/.copilot/copilot-instructions.md")
-                print(f'│    {S_DOT_ORANGE} write access is per session: copilot --add-dir="{repo_root.resolve()}"')
+                print(
+                    f"│    {S_DOT_ORANGE} file tools stay scoped to the launch directory; the wiki CLI runs as a shell"
+                )
+                print(f'│      command, so add-dir is only for direct edits: copilot --add-dir="{repo_root.resolve()}"')
             print("│")
 
         elif agent == "skills":
@@ -373,6 +533,9 @@ def run_install(repo_root: Path, targets: list[str], non_interactive: bool = Fal
                 print(f"│    {S_CROSS_RED} preserved unreadable or invalid Antigravity CLI settings: {e}")
             print(f"│    {S_DOT_ORANGE} add the wiki folder to an Antigravity IDE project for IDE write access")
             print("│")
+
+    created_dirs = [str(path) for path in absent_dirs if path.is_dir()]
+    record_owned_values(home, "shared", "createdDirs", created_dirs)
 
     active_selected = any(integration_state(agent, home, repo_root) == "active" for agent in selected_targets)
     if not success and not active_selected and not link_existed and target_link.is_symlink():

@@ -209,6 +209,22 @@ def main():
         help="Target agents (claude, claude-desktop, codex, gemini, copilot, skills, antigravity, all)",
     )
     p_install.add_argument("-y", "--yes", action="store_true", help="Non-interactive mode")
+    trust_flags = p_install.add_mutually_exclusive_group()
+    trust_flags.add_argument(
+        "--trust-folder",
+        action="store_true",
+        help="Mark this repo TRUST_FOLDER in ~/.gemini/trustedFolders.json so Gemini will start in it",
+    )
+    trust_flags.add_argument(
+        "--no-trust-folder",
+        action="store_true",
+        help="Leave Gemini trust settings alone and stop asking about this folder",
+    )
+    trust_flags.add_argument(
+        "--ask-trust",
+        action="store_true",
+        help="Forget a remembered folder-trust answer and ask about this folder once more",
+    )
 
     # wiki uninstall [targets...]
     p_uninstall = subparsers.add_parser("uninstall", help="Uninstall agent integrations")
@@ -216,6 +232,14 @@ def main():
     p_uninstall.add_argument("--dry-run", action="store_true", help="Preview removal without modifying files")
     p_uninstall.add_argument("--purge-backups", action="store_true", help="Purge rollback backup files")
     p_uninstall.add_argument("-y", "--yes", action="store_true", help="Non-interactive mode")
+    p_uninstall.add_argument(
+        "--forget-trust-choice",
+        action="store_true",
+        help=(
+            "Forget only the remembered Gemini folder-trust answer, leaving every integration "
+            "installed; ignores other removal arguments"
+        ),
+    )
 
     # wiki status
     subparsers.add_parser("status", help="Verify health and integration status across all agent platforms")
@@ -404,16 +428,38 @@ def main():
             sys.exit(1)
 
     elif args.subcommand == "install":
-        if not run_install(repo_root, args.targets, non_interactive=args.yes):
+        trust_folder = True if args.trust_folder else False if args.no_trust_folder else None
+        # Naming agents on the command line is what earns the Gemini folder-trust question; `all`
+        # and the interactive menu sweep Gemini in without the user asking about trust.
+        named_targets = bool(args.targets) and "all" not in [t.lower() for t in args.targets]
+        if not run_install(
+            repo_root,
+            args.targets,
+            non_interactive=args.yes,
+            trust_folder=trust_folder,
+            ask_trust=args.ask_trust,
+            named_targets=named_targets,
+        ):
             sys.exit(1)
 
     elif args.subcommand == "uninstall":
+        # The flag only ever concerns Gemini, so naming other agents alongside it is a mistake worth
+        # reporting rather than silently reinterpreting as "gemini".
+        named = [t.lower() for t in args.targets]
+        if args.forget_trust_choice and named and not any(t in ("gemini", "all") for t in named):
+            print(
+                f"wiki uninstall: --forget-trust-choice applies to gemini, not {', '.join(named)}",
+                file=sys.stderr,
+            )
+            print("  forget the remembered answer:  wiki uninstall gemini --forget-trust-choice", file=sys.stderr)
+            sys.exit(2)
         run_uninstall(
             repo_root,
             args.targets,
             dry_run=args.dry_run,
             purge_backups=args.purge_backups,
             non_interactive=args.yes,
+            forget_trust_choice=args.forget_trust_choice,
         )
 
     elif args.subcommand == "status":

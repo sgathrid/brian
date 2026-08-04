@@ -64,6 +64,17 @@ class TestMenu(unittest.TestCase):
         self.assertIn("enter/space select", source)
         self.assertIn('key == "SPACE"', source)
 
+    def test_run_choice_non_interactive_returns_the_default(self):
+        from wikicli.ui.menu import run_choice
+
+        options = [
+            ("yes", "Yes", "trust it"),
+            ("no", "Not now", "ask again next install"),
+            ("never", "No, don't ask again", "stop asking"),
+        ]
+        result = run_choice("Trust this folder?", options, default_id="no", non_interactive=True)
+        self.assertEqual(result, "no")
+
     def test_run_scroll_viewer_non_interactive(self):
         import io
         import sys

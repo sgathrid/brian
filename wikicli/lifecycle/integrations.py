@@ -332,6 +332,199 @@ def clear_owned_values(home: Path, agent: str) -> dict[str, list[str]]:
     return owned
 
 
+def forget_owned_setting(home: Path, agent: str, setting: str) -> list[str]:
+    """Return and forget the entries owned for one setting, leaving other settings intact."""
+    state = load_install_state(home)
+    owned = state.get(agent, {}).pop(setting, [])
+    if not state.get(agent):
+        state.pop(agent, None)
+    path = install_state_path(home)
+    if state:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+    return owned
+
+
+def forget_owned_value(home: Path, agent: str, setting: str, value: str) -> bool:
+    """Forget one recorded entry, leaving the other entries for that setting intact.
+
+    The state file is shared by every checkout on the machine, so a decision recorded for this repo
+    must be dropped by value: `forget_owned_setting` would discard another checkout's entry too.
+    """
+    state = load_install_state(home)
+    owned = state.get(agent, {}).get(setting)
+    if not isinstance(owned, list) or value not in owned:
+        return False
+    remaining = [entry for entry in owned if entry != value]
+    if remaining:
+        state[agent][setting] = remaining
+    else:
+        state[agent].pop(setting, None)
+        if not state[agent]:
+            state.pop(agent, None)
+    path = install_state_path(home)
+    if state:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    elif path.exists():
+        path.unlink()
+    return True
+
+
+def discard_json_list(data: dict, keys: tuple[str, ...], values: list[str]) -> list[str]:
+    """Remove strings from an existing nested JSON list and return only the entries dropped."""
+    parent = data
+    for key in keys[:-1]:
+        child = parent.get(key)
+        if not isinstance(child, dict):
+            return []
+        parent = child
+    current = parent.get(keys[-1])
+    if not isinstance(current, list):
+        return []
+    removed = [value for value in values if value in current]
+    parent[keys[-1]] = [value for value in current if value not in removed]
+    return removed
+
+
+def _normalize_trust_path(path: Path | str) -> str:
+    """Normalize a path the way gemini-cli compares trust rules: realpath, case-folded per platform."""
+    resolved = os.path.realpath(str(path))
+    return resolved.lower() if sys.platform in ("darwin", "win32") else resolved
+
+
+def gemini_folder_trust(repo_root: Path, home: Path) -> tuple[bool | None, str | None]:
+    """Resolve Gemini folder trust for a path, returning (trust, deciding rule).
+
+    Mirrors `isPathTrusted` in gemini-cli 0.53: every rule whose (parent, for TRUST_PARENT)
+    directory contains the path is a candidate, and the longest rule key decides. `None`
+    means no rule matched, so Gemini prompts on first use.
+    """
+    try:
+        rules = json.loads((home / ".gemini" / "trustedFolders.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None, None
+    if not isinstance(rules, dict):
+        return None, None
+
+    target = _normalize_trust_path(repo_root)
+    winner: tuple[str, str] | None = None
+    for rule_path, trust_level in rules.items():
+        if not isinstance(rule_path, str) or trust_level not in ("TRUST_FOLDER", "TRUST_PARENT", "DO_NOT_TRUST"):
+            continue
+        scope = _normalize_trust_path(Path(rule_path).parent if trust_level == "TRUST_PARENT" else rule_path)
+        contains = target == scope or target.startswith(scope.rstrip(os.sep) + os.sep)
+        if contains and (winner is None or len(rule_path) > len(winner[0])):
+            winner = (rule_path, trust_level)
+    if winner is None:
+        return None, None
+    return winner[1] != "DO_NOT_TRUST", winner[0]
+
+
+def prunable_dirs(home: Path) -> list[Path]:
+    """Directories this installer creates for its own artifacts, in child-before-parent order.
+
+    Never includes a directory an agent owns (`~/.claude`, `~/.gemini`, ...): those stay even when
+    empty. Uninstall removes only the entries it recorded as created, and only while empty.
+    """
+    return [
+        home / ".claude/commands",
+        home / ".claude/skills",
+        home / ".codex/skills",
+        home / ".gemini/skills",
+        home / ".gemini/antigravity-cli",
+        home / ".agents/skills",
+        home / ".local/state/brian-wiki",
+    ]
+
+
+def gemini_trust_advice(repo_root: Path, home: Path) -> str | None:
+    """Return the rule that would stop Gemini from starting in this repo, or None when it may start.
+
+    Mirrors `checkPathTrust` precedence in gemini-cli 0.53: the GEMINI_CLI_TRUST_WORKSPACE override
+    first, then security.folderTrust.enabled (on by default), then the trust file.
+    """
+    if os.environ.get("GEMINI_CLI_TRUST_WORKSPACE") == "true":
+        return None
+    try:
+        settings = json.loads((home / ".gemini" / "settings.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        settings = {}
+    security = settings.get("security") if isinstance(settings, dict) else None
+    folder_trust = security.get("folderTrust") if isinstance(security, dict) else None
+    if isinstance(folder_trust, dict) and folder_trust.get("enabled", True) is False:
+        return None
+    trusted, rule = gemini_folder_trust(repo_root, home)
+    return rule if trusted is False else None
+
+
+TRUST_DECLINED = "trustDeclined"
+
+
+def gemini_trust_decision(repo_root: Path, home: Path) -> tuple[str, str | None]:
+    """Classify what to do about Gemini folder trust here, as (decision, blocking rule).
+
+    "clear"    — nothing blocks Gemini in this folder, so there is no question to ask.
+    "gemini"   — the blocking rule names this exact folder: the user already answered Gemini's own
+                 trust dialog, and an installer must not re-ask what `/permissions` decided.
+    "declined" — a previous run recorded a decline for this folder; advise, never prompt.
+    "prompt"   — the block is inherited from a parent rule and nobody has decided for this folder.
+    """
+    rule = gemini_trust_advice(repo_root, home)
+    if rule is None:
+        return "clear", None
+    if _normalize_trust_path(rule) == _normalize_trust_path(repo_root):
+        return "gemini", rule
+    declined = load_install_state(home).get("gemini", {}).get(TRUST_DECLINED, [])
+    if isinstance(declined, list) and str(repo_root.resolve()) in declined:
+        return "declined", rule
+    return "prompt", rule
+
+
+def gemini_trust_folder(repo_root: Path, home: Path) -> str:
+    """Mark one folder TRUST_FOLDER in Gemini's trust file, preserving every other rule.
+
+    Returns "added", "present" when the rule was already there, or "failed". Gemini keeps this
+    file owner-readable only, so a file created here matches that mode.
+    """
+    trust_file = home / ".gemini" / "trustedFolders.json"
+    key = str(repo_root.resolve())
+    try:
+        rules = json.loads(trust_file.read_text(encoding="utf-8")) if trust_file.is_file() else {}
+        if not isinstance(rules, dict):
+            return "failed"
+        if rules.get(key) == "TRUST_FOLDER":
+            return "present"
+        rules[key] = "TRUST_FOLDER"
+        trust_file.parent.mkdir(parents=True, exist_ok=True)
+        existed = trust_file.is_file()
+        if existed:
+            shutil.copy2(trust_file, backup_path(trust_file))
+        trust_file.write_text(json.dumps(rules, indent=2) + "\n", encoding="utf-8")
+        if not existed:
+            trust_file.chmod(0o600)
+    except (OSError, json.JSONDecodeError):
+        return "failed"
+    return "added"
+
+
+def gemini_distrust_folder(repo_root: Path, home: Path) -> bool:
+    """Drop one TRUST_FOLDER rule this installer added, leaving rules it did not write."""
+    trust_file = home / ".gemini" / "trustedFolders.json"
+    key = str(repo_root.resolve())
+    try:
+        rules = json.loads(trust_file.read_text(encoding="utf-8")) if trust_file.is_file() else {}
+        if not isinstance(rules, dict) or rules.get(key) != "TRUST_FOLDER":
+            return False
+        del rules[key]
+        trust_file.write_text(json.dumps(rules, indent=2) + "\n", encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        return False
+    return True
+
+
 def add_json_list(data: dict, keys: tuple[str, ...], values: list[str]) -> list[str]:
     """Append unique strings at a nested JSON setting and return only new entries."""
     parent = data

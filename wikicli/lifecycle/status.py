@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from ..core.config import WikiConfig
-from .integrations import AGENT_REGISTRY, SUPPORTED_AGENTS, integration_state
+from .integrations import AGENT_REGISTRY, SUPPORTED_AGENTS, gemini_trust_decision, integration_state
 from .personalization import load_agent_rule_catalog
 from .sync import get_sync_status
 
@@ -120,6 +120,23 @@ def run_status(repo_root: Path) -> None:
             )
         else:
             print(f"│    {S_CIRCLE_DIM} {absent_message}")
+        # Shown whether or not Gemini is configured: a trust rule blocks it here either way, and
+        # gemini_trust_decision is already silent on machines with no rule covering this repo.
+        if agent == "gemini":
+            trust_decision, blocking_rule = gemini_trust_decision(repo_root, home)
+            if blocking_rule:
+                # gemini-cli 0.53 starts in restricted mode rather than exiting, and skips the hooks
+                # from settings, so no wiki context loads here.
+                print(f"│    {S_TRIANGLE_ORANGE} Gemini runs restricted in this folder: untrusted via {blocking_rule}")
+                # This is the standing reminder for a folder the installer no longer asks about, so
+                # the reversal stays visible instead of the integration failing silently.
+                if trust_decision == "declined":
+                    print("│      you declined trust for this folder, so `wiki install` stopped asking")
+                    print("│      ask again with `wiki install gemini --ask-trust`")
+                elif trust_decision == "gemini":
+                    print("│      this exact folder is marked DO_NOT_TRUST in Gemini's own trust file")
+                print("│      allow it with `wiki install gemini --trust-folder`, or add this line")
+                print(f'│      to ~/.gemini/trustedFolders.json:  "{repo_root.resolve()}": "TRUST_FOLDER"')
         if idx < len(sorted_agents) - 1:
             print("│")
 

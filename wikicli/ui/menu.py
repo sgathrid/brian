@@ -210,6 +210,24 @@ def run_confirm(
     return res == "yes"
 
 
+def run_choice(
+    prompt: str,
+    options: Sequence[tuple[str, str, str]],
+    default_id: str,
+    title: str = "Wiki Setup",
+    non_interactive: bool = False,
+) -> str:
+    """Renders a single-select prompt over (id, label, hint) options and returns the chosen id.
+
+    For questions with more than two answers, where `run_confirm`'s bool cannot say which "no"
+    the user meant. Without a TTY the default id is returned and nothing is rendered.
+    """
+    if non_interactive or not is_tty():
+        return default_id
+    items = [(oid, label, hint, oid == default_id) for oid, label, hint in options]
+    return run_menu(prompt, options=items, title=title, single_select=True) or default_id
+
+
 def run_menu(
     prompt_or_json: str,
     options: Sequence[tuple[Any, ...]] | None = None,

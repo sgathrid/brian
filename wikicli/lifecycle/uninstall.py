@@ -11,6 +11,7 @@ from ..ui.menu import run_menu
 from .integrations import (
     AGENT_REGISTRY,
     SUPPORTED_AGENTS,
+    TRUST_DECLINED,
     _restore_codex_features_hooks,
     _restore_codex_writable_root,
     _strip_codex_wiki_hooks,
@@ -19,10 +20,14 @@ from .integrations import (
     atomic_write_json,
     backup_path,
     clear_owned_values,
+    forget_owned_value,
+    gemini_distrust_folder,
     get_claude_desktop_config_path,
+    install_state_path,
     integration_state,
     is_repo_symlink,
     load_install_state,
+    prunable_dirs,
     remove_antigravity_import,
     remove_json_list,
 )
@@ -94,6 +99,26 @@ def _remove_repo_links(paths: list[Path], repo_root: Path, dry_run: bool) -> int
     return len(owned)
 
 
+def _remove_empty_dirs(paths: list[Path], dry_run: bool, ignore_names: tuple[str, ...] = ()) -> list[Path]:
+    """Remove recorded installer-created directories, and only while they are empty.
+
+    `ignore_names` lets a dry run predict the real outcome: this installer's own files, which a real
+    run deletes before pruning, do not count as contents. The agents' own directories never appear
+    in `paths`.
+    """
+    removed = []
+    for path in paths:
+        if path.is_symlink() or not path.is_dir():
+            continue
+        contents = [entry for entry in path.iterdir() if not entry.name.endswith(ignore_names)]
+        if contents:
+            continue
+        removed.append(path)
+        if not dry_run:
+            path.rmdir()
+    return removed
+
+
 def _remove_created_file_if_empty(path: Path, owned: dict[str, list[str]], dry_run: bool) -> None:
     """Remove a now-empty config only when this installer created the file."""
     if dry_run or str(path) not in owned.get("createdFiles", []) or not path.is_file():
@@ -116,17 +141,49 @@ def _remove_created_file_if_empty(path: Path, owned: dict[str, list[str]], dry_r
     path.unlink()
 
 
+def _forget_gemini_trust_choice(repo_root: Path, home: Path, dry_run: bool) -> None:
+    """Drop the remembered folder-trust decline for this repo, reporting either way."""
+    root = str(repo_root.resolve())
+    recorded = root in load_install_state(home).get("gemini", {}).get(TRUST_DECLINED, [])
+    mode_label = " (DRY RUN — PREVIEW ONLY, NO CHANGES MADE)" if dry_run else ""
+    print(f"┌  {C_BOLD}Brian Wiki Uninstall{mode_label}{C_RESET}")
+    print("│")
+    print(f"│  repo: {repo_root}")
+    print("│")
+    print("│  Gemini CLI (~/.gemini)")
+    if not recorded:
+        print(f"│    {S_CIRCLE_DIM} no remembered folder-trust answer for this repo")
+    elif dry_run:
+        print(f"│    {S_DOT_RED} [dry run] would forget the remembered folder-trust answer")
+    elif forget_owned_value(home, "gemini", TRUST_DECLINED, root):
+        print(f"│    {S_DOT_RED} forgot the remembered folder-trust answer; `wiki install gemini` asks again")
+    else:
+        print(f"│    {S_CROSS_RED} could not update {install_state_path(home)}")
+    print("│")
+    print(f"└  {C_BOLD}Done. Every integration was left in place.{C_RESET}")
+
+
 def run_uninstall(
     repo_root: Path,
     targets: list[str],
     dry_run: bool = False,
     purge_backups: bool = False,
     non_interactive: bool = False,
+    forget_trust_choice: bool = False,
 ) -> None:
-    """Executes uninstallation for specified agent targets."""
+    """Executes uninstallation for specified agent targets.
+
+    `forget_trust_choice` is surgical: it drops only the remembered "don't ask about Gemini folder
+    trust" answer for this repo and leaves every integration in place, so forgetting one decision
+    never costs you a working setup.
+    """
     home = Path.home()
     local_bin = home / ".local" / "bin"
     target_link = local_bin / "wiki"
+
+    if forget_trust_choice:
+        _forget_gemini_trust_choice(repo_root, home, dry_run)
+        return
 
     if targets and "all" in targets:
         selected_targets = list(SUPPORTED_AGENTS)
@@ -265,14 +322,22 @@ def run_uninstall(
                 dry_run,
             )
             links = _remove_repo_links([home / ".gemini/skills/wiki-context"], repo_root, dry_run)
+            # Trust is only reverted when this installer wrote it, so a folder trusted by hand survives.
+            owned_trust = str(repo_root.resolve()) in install_state.get("gemini", {}).get("trustedFolders", [])
+            trust_removed = owned_trust and (dry_run or gemini_distrust_folder(repo_root, home))
             if removed:
                 print(f"│    {S_DOT_RED} {prefix} {removed} SessionStart hook(s) from ~/.gemini/settings.json")
             else:
                 print(f"│    {S_CIRCLE_DIM} no wiki hooks found in ~/.gemini/settings.json")
             if access_removed or links:
                 print(f"│    {S_DOT_RED} {prefix} owned access and {links} skill link(s)")
+            if trust_removed:
+                print(f"│    {S_DOT_RED} {prefix} the TRUST_FOLDER rule this installer added for this repo")
             if not dry_run:
                 _remove_created_file_if_empty(gsettings, install_state.get("gemini", {}), dry_run)
+                _remove_created_file_if_empty(
+                    home / ".gemini/trustedFolders.json", install_state.get("gemini", {}), dry_run
+                )
                 clear_owned_values(home, "gemini")
             print("│")
 
@@ -356,8 +421,13 @@ def run_uninstall(
                 clear_owned_values(home, "antigravity")
             print("│")
 
-    # The CLI is shared: remove it only after the last integration is gone.
-    remaining = any(integration_state(agent, home, repo_root) != "absent" for agent in SUPPORTED_AGENTS)
+    # The CLI is shared: remove it only after the last integration is gone. A dry run has changed
+    # nothing yet, so it previews the state a real run would reach.
+    remaining = any(
+        integration_state(agent, home, repo_root) != "absent"
+        for agent in SUPPORTED_AGENTS
+        if not (dry_run and agent in selected_targets)
+    )
     if not remaining:
         print("│  CLI Binary on PATH")
         source_wiki = (repo_root / "bin" / "wiki").resolve()
@@ -379,6 +449,7 @@ def run_uninstall(
                 get_claude_desktop_config_path(home),
                 home / ".codex/config.toml",
                 home / ".gemini/settings.json",
+                home / ".gemini/trustedFolders.json",
                 home / ".copilot/copilot-instructions.md",
                 home / ".cursor/cli-config.json",
                 home / ".gemini/GEMINI.md",
@@ -390,6 +461,28 @@ def run_uninstall(
                 b.unlink()
                 print(f"│    {S_CHECK_GREEN} removed backup: {b}")
         print("│")
+
+    # Last: directories can only be pruned once the files and backups inside them are gone.
+    if not remaining:
+        owned_dirs = [
+            path for path in prunable_dirs(home) if str(path) in install_state.get("shared", {}).get("createdDirs", [])
+        ]
+        if dry_run:
+            # The files that keep these directories occupied are still in place during a preview,
+            # so report the intent rather than a count that would understate the real run.
+            if owned_dirs:
+                print("│  Empty Directories")
+                print(f"│    {S_DOT_RED} [dry run] would remove up to {len(owned_dirs)} director(ies) we created,")
+                print("│      each only if still empty once its contents are gone")
+                print("│")
+        else:
+            clear_owned_values(home, "shared")
+            ignore_names = ("install.json", ".brian-wiki.backup") if purge_backups else ("install.json",)
+            pruned = _remove_empty_dirs(owned_dirs, dry_run, ignore_names)
+            if pruned:
+                print("│  Empty Directories")
+                print(f"│    {S_DOT_RED} removed {len(pruned)} director{'y' if len(pruned) == 1 else 'ies'} we created")
+                print("│")
 
     if dry_run:
         print(f"└  {C_BOLD}Done. (Dry run mode — no files or settings were modified){C_RESET}")
